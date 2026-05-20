@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: fortytwo-network-node-analysis
+    runtime: docker
+    rootDir: bot
+    dockerfilePath: ./Dockerfile
+    region: virginia
+    plan: free
+    healthCheckPath: /healthz
+    envVars:
+      - key: TELEGRAM_TOKEN
+        sync: false
+      - key: AGENT_TOKEN
+        sync: false
+      - key: PUBLIC_URL
+        sync: false
+      - key: WALLET
+        value: 0xYourMonadTestnetWallet
+      - key: FOR_CONTRACT
+        value: 0xf6B888f442277F01294F94D555608A2E8Bc86430
+      - key: MONAD_RPC_URL
+        value: https://testnet-rpc.monad.xyz/
