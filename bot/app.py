@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 import time
@@ -10,8 +11,11 @@ from pydantic import BaseModel, Field
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
-from chain import get_for_balance
+import wallets as wstore
+from chain import get_for_balance, get_native_balance
 from dashboard_html import DASHBOARD_HTML
+from db import init_schema
+from poller import poll_loop
 from store import Snapshot, store
 
 log = logging.getLogger("bot")
@@ -104,22 +108,35 @@ async def cmd_today(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(msg, parse_mode="Markdown")
 
 
-async def cmd_balance(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
+async def cmd_balance(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    # Accept optional wallet argument, otherwise use the operator wallet
+    target = WALLET
+    if ctx.args:
+        cand = wstore.normalize_addr(ctx.args[0])
+        if not cand:
+            await update.message.reply_text(
+                "Usage: `/balance` or `/balance 0x<address>`",
+                parse_mode="Markdown",
+            )
+            return
+        target = cand
     try:
-        bal = await get_for_balance(MONAD_RPC_URL, FOR_CONTRACT, WALLET)
+        bal = await get_for_balance(MONAD_RPC_URL, FOR_CONTRACT, target)
     except Exception as e:
         log.exception("balance lookup failed")
         await update.message.reply_text(f"RPC error: {e}")
         return
-    s = store.latest
+
     extra = ""
-    if s and s.last_reward_amount is not None:
-        extra = (
-            f"\n*Last reward:* +{fmt_for(s.last_reward_amount)} FOR "
-            f"({s.last_reward_iso or '—'} UTC)"
-        )
+    if target.lower() == WALLET.lower():
+        s = store.latest
+        if s and s.last_reward_amount is not None:
+            extra = (
+                f"\n*Last reward:* +{fmt_for(s.last_reward_amount)} FOR "
+                f"({s.last_reward_iso or '—'} UTC)"
+            )
     msg = (
-        f"*Wallet:* `{short_addr(WALLET)}` (Monad Testnet)\n"
+        f"*Wallet:* `{short_addr(target)}` (Monad Testnet)\n"
         f"*FOR balance:* *{fmt_for(bal)}*"
         f"{extra}"
     )
@@ -143,13 +160,17 @@ async def cmd_recent(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
 async def cmd_help(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
     msg = (
         "*Available commands*\n"
-        "/status — node alive, model, max TPS, last seen\n"
-        "/today — rounds participated, errors, first/last round\n"
-        "/balance — FOR balance from Monad chain + last reward\n"
-        "/recent — last 5 inference rounds\n"
-        "/uptime — Capsule process uptime\n"
-        "/version — Capsule + Protocol versions\n"
-        "/help — this message\n"
+        "/status — operator node alive, model, max TPS\n"
+        "/today — rounds participated today (operator)\n"
+        "/balance `[wallet]` — FOR balance (operator if no arg, any wallet otherwise)\n"
+        "/recent — last 5 inference rounds (operator)\n"
+        "/uptime — Capsule process uptime (operator)\n"
+        "/version — Capsule + Protocol versions (operator)\n"
+        "\n*Multi-wallet*\n"
+        "/wallet `0x...` — query any wallet's FOR + MONAD balance\n"
+        "/subscribe `0x...` — receive DM notifications on every FOR reward\n"
+        "/unsubscribe `0x...` — stop notifications for a wallet\n"
+        "/mywallets — list your subscriptions\n"
         f"\n*Dashboard:* {PUBLIC_URL}/dashboard"
     )
     await update.message.reply_text(msg, parse_mode="Markdown", disable_web_page_preview=True)
@@ -181,9 +202,84 @@ async def cmd_version(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(msg, parse_mode="Markdown")
 
 
+async def cmd_subscribe(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    if not ctx.args:
+        await update.message.reply_text(
+            "Usage: `/subscribe 0x<address>`\nYou'll receive a notification "
+            "every time this wallet receives a FOR reward.",
+            parse_mode="Markdown",
+        )
+        return
+    try:
+        addr = wstore.subscribe(update.effective_chat.id, ctx.args[0])
+    except ValueError:
+        await update.message.reply_text("Invalid address — must be `0x` + 40 hex chars.", parse_mode="Markdown")
+        return
+    await update.message.reply_text(
+        f"✅ Subscribed to `{short_addr(addr)}`.\nYou'll be DM'd on every FOR reward.",
+        parse_mode="Markdown",
+    )
+
+
+async def cmd_unsubscribe(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    if not ctx.args:
+        await update.message.reply_text("Usage: `/unsubscribe 0x<address>`", parse_mode="Markdown")
+        return
+    ok = wstore.unsubscribe(update.effective_chat.id, ctx.args[0])
+    if ok:
+        await update.message.reply_text(f"Unsubscribed from `{short_addr(ctx.args[0])}`.", parse_mode="Markdown")
+    else:
+        await update.message.reply_text("You weren't subscribed to that wallet.")
+
+
+async def cmd_mywallets(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    subs = wstore.list_subscriptions(update.effective_chat.id)
+    if not subs:
+        await update.message.reply_text(
+            "No subscriptions. Use `/subscribe 0x<address>` to receive reward notifications.",
+            parse_mode="Markdown",
+        )
+        return
+    lines = ["*Your subscribed wallets:*"]
+    for s in subs:
+        lines.append(f"`{s['wallet']}`")
+    await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+
+
+async def cmd_wallet(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    if not ctx.args:
+        await update.message.reply_text("Usage: `/wallet 0x<address>`", parse_mode="Markdown")
+        return
+    addr = wstore.normalize_addr(ctx.args[0])
+    if not addr:
+        await update.message.reply_text("Invalid address.", parse_mode="Markdown")
+        return
+    try:
+        for_bal = await get_for_balance(MONAD_RPC_URL, FOR_CONTRACT, addr)
+        mon_bal = await get_native_balance(MONAD_RPC_URL, addr)
+    except Exception as e:
+        await update.message.reply_text(f"RPC error: {e}")
+        return
+    msg = (
+        f"*Wallet:* `{short_addr(addr)}`\n"
+        f"*FOR balance:* {fmt_for(for_bal)}\n"
+        f"*MONAD balance:* {mon_bal:.4f}"
+    )
+    await update.message.reply_text(msg, parse_mode="Markdown")
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     global application
+    init_schema()
+    log.info("SQLite schema initialised")
+
+    # Auto-watch the operator wallet so it shows up in the dashboard list
+    try:
+        wstore.add_watched(WALLET, label="Operator")
+    except Exception as e:
+        log.warning(f"could not seed operator wallet: {e}")
+
     application = Application.builder().token(TELEGRAM_TOKEN).build()
     application.add_handler(CommandHandler("status", cmd_status))
     application.add_handler(CommandHandler("today", cmd_today))
@@ -193,12 +289,26 @@ async def lifespan(_app: FastAPI):
     application.add_handler(CommandHandler("uptime", cmd_uptime))
     application.add_handler(CommandHandler("version", cmd_version))
     application.add_handler(CommandHandler("start", cmd_help))
+    application.add_handler(CommandHandler("subscribe", cmd_subscribe))
+    application.add_handler(CommandHandler("unsubscribe", cmd_unsubscribe))
+    application.add_handler(CommandHandler("mywallets", cmd_mywallets))
+    application.add_handler(CommandHandler("wallet", cmd_wallet))
     await application.initialize()
     await application.start()
     log.info("Telegram application started")
+
+    poller_task = asyncio.create_task(
+        poll_loop(application, MONAD_RPC_URL, FOR_CONTRACT, interval=60)
+    )
+    log.info("Reward poller scheduled (60s interval)")
     try:
         yield
     finally:
+        poller_task.cancel()
+        try:
+            await poller_task
+        except (asyncio.CancelledError, Exception):
+            pass
         await application.stop()
         await application.shutdown()
 
@@ -266,6 +376,47 @@ async def root():
 @app.get("/dashboard", response_class=HTMLResponse, include_in_schema=False)
 async def dashboard():
     return HTMLResponse(content=DASHBOARD_HTML)
+
+
+class AddWalletPayload(BaseModel):
+    address: str
+    label: str | None = None
+
+
+@app.post("/v1/wallets")
+async def add_wallet(payload: AddWalletPayload):
+    try:
+        addr = wstore.add_watched(payload.address, payload.label)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True, "address": addr}
+
+
+@app.get("/v1/wallets")
+async def list_wallets():
+    rows = wstore.list_watched()
+    enriched: list[dict] = []
+    for w in rows:
+        addr = w["address"]
+        for_bal = None
+        mon_bal = None
+        try:
+            for_bal = await get_for_balance(MONAD_RPC_URL, FOR_CONTRACT, addr)
+        except Exception:
+            pass
+        try:
+            mon_bal = await get_native_balance(MONAD_RPC_URL, addr)
+        except Exception:
+            pass
+        enriched.append({
+            "address": addr,
+            "label": w.get("label"),
+            "added_at": w.get("added_at"),
+            "for_balance": for_bal,
+            "monad_balance": mon_bal,
+            "is_operator": addr.lower() == WALLET.lower(),
+        })
+    return {"wallets": enriched}
 
 
 @app.get("/v1/dashboard-data")

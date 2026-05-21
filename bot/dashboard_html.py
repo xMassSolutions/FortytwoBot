@@ -57,6 +57,26 @@ a { color: var(--blue); text-decoration: none; }
       <tbody id="rounds-body"></tbody>
     </table>
   </div>
+
+  <div class="rounds-list" style="margin-top: 16px;">
+    <div class="section-title">Watched wallets (multi-wallet)</div>
+    <p style="color: var(--muted); font-size: 13px; margin-bottom: 12px;">
+      Add any Monad Testnet wallet to watch its FOR + MONAD balance. To get reward notifications in Telegram, open the bot and send <code>/subscribe 0x...</code>
+    </p>
+    <form id="add-form" style="display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap;">
+      <input id="addr-input" type="text" placeholder="0x… wallet address" required pattern="^0x[0-9a-fA-F]{40}$"
+        style="flex: 1; min-width: 220px; padding: 8px 12px; background: var(--bg); border: 1px solid var(--border); color: var(--text); border-radius: 6px; font-family: ui-monospace, monospace; font-size: 13px;">
+      <input id="label-input" type="text" placeholder="label (optional)" maxlength="40"
+        style="width: 180px; padding: 8px 12px; background: var(--bg); border: 1px solid var(--border); color: var(--text); border-radius: 6px; font-size: 13px;">
+      <button type="submit" style="padding: 8px 16px; background: var(--blue); color: #000; border: none; border-radius: 6px; font-weight: 600; cursor: pointer; font-size: 13px;">Add</button>
+    </form>
+    <div id="add-msg" style="font-size: 12px; min-height: 16px; margin-bottom: 8px;"></div>
+    <table>
+      <thead><tr><th>Wallet</th><th>Label</th><th>FOR Balance</th><th>MONAD</th><th></th></tr></thead>
+      <tbody id="wallets-body"><tr><td colspan="5" style="color:var(--muted);text-align:center">Loading…</td></tr></tbody>
+    </table>
+  </div>
+
   <footer>Auto-refresh every 30s · <span id="updated"></span></footer>
 </div>
 
@@ -137,8 +157,66 @@ async function refresh(){
     chart.update('none');
   }
 }
+async function refreshWallets(){
+  try {
+    const r = await fetch('/v1/wallets', {cache:'no-store'});
+    const data = await r.json();
+    const rows = data.wallets || [];
+    if (!rows.length) {
+      document.getElementById('wallets-body').innerHTML = '<tr><td colspan="5" style="color:var(--muted);text-align:center">No wallets watched yet</td></tr>';
+      return;
+    }
+    document.getElementById('wallets-body').innerHTML = rows.map(w => {
+      const op = w.is_operator ? ' <span class="badge ok" style="margin-left:4px">OPERATOR</span>' : '';
+      const forBal = w.for_balance != null ? fmtNum(w.for_balance) : '—';
+      const monBal = w.monad_balance != null ? Number(w.monad_balance).toFixed(4) : '—';
+      const label = w.label || '<span style="color:var(--muted)">—</span>';
+      const short = `${w.address.slice(0,8)}…${w.address.slice(-6)}`;
+      return `<tr>
+        <td style="font-size:12px">${short}${op}</td>
+        <td>${label}</td>
+        <td>${forBal}</td>
+        <td>${monBal}</td>
+        <td><button onclick="copyAddr('${w.address}')" style="background:none;border:1px solid var(--border);color:var(--muted);padding:2px 8px;border-radius:4px;cursor:pointer;font-size:11px">copy</button></td>
+      </tr>`;
+    }).join('');
+  } catch(e){
+    document.getElementById('wallets-body').innerHTML = `<tr><td colspan="5" style="color:var(--red);text-align:center">load error: ${e.message}</td></tr>`;
+  }
+}
+
+function copyAddr(a){ navigator.clipboard.writeText(a); }
+
+document.getElementById('add-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const address = document.getElementById('addr-input').value.trim();
+  const label = document.getElementById('label-input').value.trim() || null;
+  const msg = document.getElementById('add-msg');
+  msg.textContent = 'Adding…';
+  msg.style.color = 'var(--muted)';
+  try {
+    const r = await fetch('/v1/wallets', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({address, label}),
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.detail || 'failed');
+    msg.textContent = `Added ${j.address}`;
+    msg.style.color = 'var(--green)';
+    document.getElementById('addr-input').value = '';
+    document.getElementById('label-input').value = '';
+    refreshWallets();
+  } catch(err){
+    msg.textContent = 'Error: ' + err.message;
+    msg.style.color = 'var(--red)';
+  }
+});
+
 refresh();
+refreshWallets();
 setInterval(refresh, 30000);
+setInterval(refreshWallets, 60000);
 </script>
 </body>
 </html>
