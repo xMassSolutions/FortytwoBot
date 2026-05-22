@@ -33,7 +33,7 @@ logging.basicConfig(
 
 TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
 AGENT_TOKEN = os.environ["AGENT_TOKEN"]
-WALLET = os.environ.get("WALLET", "0xYourMonadTestnetWallet")
+WALLET = os.environ["WALLET"]
 FOR_CONTRACT = os.environ.get("FOR_CONTRACT", "0xf6B888f442277F01294F94D555608A2E8Bc86430")
 MONAD_RPC_URL = os.environ.get("MONAD_RPC_URL", "https://testnet-rpc.monad.xyz/")
 PUBLIC_URL = os.environ.get("PUBLIC_URL", "").rstrip("/")
@@ -628,6 +628,7 @@ class StatusPayload(BaseModel):
     last_reward_amount: float | None = None
     last_reward_iso: str | None = None
     rewards_today_total: float | None = None
+    wins_today: int = 0
     capsule_pid: int | None = None
     protocol_pid: int | None = None
     capsule_alive: bool = False
@@ -748,6 +749,7 @@ async def dashboard_data():
             "last_reward_amount": s.last_reward_amount,
             "last_reward_iso": s.last_reward_iso,
             "rewards_today_total": s.rewards_today_total,
+            "wins_today": s.wins_today,
             "capsule_pid": s.capsule_pid,
             "protocol_pid": s.protocol_pid,
             "capsule_alive": s.capsule_alive,

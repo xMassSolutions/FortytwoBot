@@ -21,6 +21,7 @@ class Snapshot:
     last_reward_amount: float | None = None
     last_reward_iso: str | None = None
     rewards_today_total: float | None = None
+    wins_today: int = 0
     capsule_pid: int | None = None
     protocol_pid: int | None = None
     capsule_alive: bool = False

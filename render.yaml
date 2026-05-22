@@ -15,7 +15,7 @@ services:
       - key: PUBLIC_URL
         sync: false
       - key: WALLET
-        value: 0xYourMonadTestnetWallet
+        sync: false
       - key: FOR_CONTRACT
         value: 0xf6B888f442277F01294F94D555608A2E8Bc86430
       - key: MONAD_RPC_URL

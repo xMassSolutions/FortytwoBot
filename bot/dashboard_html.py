@@ -74,7 +74,7 @@ a { color: var(--blue); text-decoration: none; }
   </div>
 
   <div class="rounds-list" style="margin-top: 16px;">
-    <div class="section-title">Last 5 errors</div>
+    <div class="section-title">Last 3 errors</div>
     <table>
       <thead><tr><th>Time UTC</th><th>Message</th></tr></thead>
       <tbody id="errors-body"><tr><td colspan="2" style="color:var(--muted);text-align:center">Loading…</td></tr></tbody>
@@ -82,9 +82,20 @@ a { color: var(--blue); text-decoration: none; }
   </div>
 
   <div class="rounds-list" style="margin-top: 16px;">
+    <div class="section-header">
+      <span class="section-title">Node log (last 100 lines)</span>
+      <span class="toggle-group">
+        <button class="toggle-btn active" data-log="extended">extended</button>
+        <button class="toggle-btn" data-log="capsule">capsule</button>
+      </span>
+    </div>
+    <pre id="log-view" class="log-view"></pre>
+  </div>
+
+  <div class="rounds-list" style="margin-top: 16px;">
     <div class="section-title">Watched wallets (multi-wallet)</div>
     <p style="color: var(--muted); font-size: 13px; margin-bottom: 12px;">
-      Add any Monad Testnet wallet to watch its FOR + MONAD balance. To get reward notifications in Telegram, open the bot and send <code>/subscribe 0x...</code>
+      Add any Monad Testnet wallet to watch its FOR + MONAD balance.
     </p>
     <form id="add-form" style="display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap;">
       <input id="addr-input" type="text" placeholder="0x… wallet address" required pattern="^0x[0-9a-fA-F]{40}$"
@@ -100,18 +111,7 @@ a { color: var(--blue); text-decoration: none; }
     </table>
   </div>
 
-  <div class="rounds-list" style="margin-top: 16px;">
-    <div class="section-header">
-      <span class="section-title">Node log (last 100 lines)</span>
-      <span class="toggle-group">
-        <button class="toggle-btn active" data-log="extended">extended</button>
-        <button class="toggle-btn" data-log="capsule">capsule</button>
-      </span>
-    </div>
-    <pre id="log-view" class="log-view"></pre>
-  </div>
-
-  <footer>Auto-refresh every 30s · <span id="updated"></span></footer>
+  <footer>Auto-refresh every 3m · <span id="updated"></span></footer>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
@@ -242,10 +242,19 @@ async function refresh(){
       + row('Protocol', `${s.protocol_version||'—'} <span style="color:var(--muted)">PID ${s.protocol_pid||'—'}</span>`)
       + row('Uptime', fmtUp(s.capsule_uptime_seconds));
 
+    const participated = s.rounds_participated_today || 0;
+    const wins = s.wins_today || 0;
+    const losses = Math.max(participated - wins, 0);
+    const wlRow = participated > 0
+      ? row('W / L', `<span style="color:var(--green)">${wins}</span> / <span style="color:var(--red)">${losses}</span>`)
+        + row('Win rate', `${Math.round(wins / participated * 100)}%`)
+      : '';
+
     document.getElementById('today-content').innerHTML =
-        row('Participated', `<strong style="font-size:18px">${s.rounds_participated_today}</strong>`)
+        row('Participated', `<strong style="font-size:18px">${participated}</strong>`)
       + row('Observed', s.rounds_observed_today)
       + row('Errors', s.errors_today)
+      + wlRow
       + row('First round', s.first_round_today_iso||'—')
       + row('Last round', `${s.last_round_today_iso||'—'} <span style="color:var(--muted)">${s.last_round_duration_s?s.last_round_duration_s+'s':''}</span>`);
 
@@ -259,6 +268,7 @@ async function refresh(){
     document.getElementById('balance-content').innerHTML =
       `<div class="balance-big">${fmtNum(data.balance)} <span style="color:var(--muted);font-size:14px;font-weight:400">FOR</span></div>`
       + (s && s.rewards_today_total ? `<div class="balance-reward">+${fmtNum(s.rewards_today_total)} FOR earned today</div>` : '')
+      + (s && s.wins_today ? `<div class="balance-reward" style="color:var(--muted)">${s.wins_today} wins today</div>` : '')
       + (s && s.last_reward_amount ? `<div class="balance-reward" style="color:var(--muted)">last +${fmtNum(s.last_reward_amount)} FOR at ${s.last_reward_iso||'—'} UTC</div>` : '');
   } else {
     document.getElementById('balance-content').innerHTML = `<div style="color:var(--red);font-size:13px">RPC error: ${data.balance_error||'unknown'}</div>`;
@@ -342,8 +352,8 @@ document.querySelectorAll('.toggle-btn[data-log]').forEach(btn => {
 
 refresh();
 refreshWallets();
-setInterval(refresh, 30000);
-setInterval(refreshWallets, 60000);
+setInterval(refresh, 180000);
+setInterval(refreshWallets, 180000);
 </script>
 </body>
 </html>
