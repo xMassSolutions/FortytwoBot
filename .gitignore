@@ -7,3 +7,5 @@ __pycache__/
 venv/
 agent/_agent-wrapper.ps1
 agent/agent.log
+agent/rounds-history.json
+agent/rounds-history.json.tmp

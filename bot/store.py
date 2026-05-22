@@ -20,12 +20,17 @@ class Snapshot:
     last_round_duration_s: int | None = None
     last_reward_amount: float | None = None
     last_reward_iso: str | None = None
+    rewards_today_total: float | None = None
     capsule_pid: int | None = None
     protocol_pid: int | None = None
     capsule_alive: bool = False
     protocol_alive: bool = False
     recent_rounds: list[dict[str, Any]] = field(default_factory=list)
     all_rounds_today: list[dict[str, Any]] = field(default_factory=list)
+    rounds_history: dict[str, int] = field(default_factory=dict)
+    recent_errors: list[dict[str, Any]] = field(default_factory=list)
+    log_extended: list[str] = field(default_factory=list)
+    log_capsule: list[str] = field(default_factory=list)
 
 
 class Store:
