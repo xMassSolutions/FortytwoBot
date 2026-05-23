@@ -517,9 +517,11 @@ def post_snapshot(bot_url: str, agent_token: str, snap: dict[str, Any]) -> None:
 
 def event_loop(args: argparse.Namespace, scripts_root: Path, history_file: Path) -> None:
     ext_log = scripts_root / "extended_log.txt"
+    heartbeat_seconds = 30
+    poll_interval = 5
 
     print(
-        f"Fortytwo agent starting. Mode: event-driven + 10-min heartbeat. "
+        f"Fortytwo agent starting. Mode: event-driven + {heartbeat_seconds}s heartbeat. "
         f"Bot URL: {args.bot_url}",
         flush=True,
     )
@@ -533,9 +535,6 @@ def event_loop(args: argparse.Namespace, scripts_root: Path, history_file: Path)
         print(f"[bootstrap] {e}", flush=True)
 
     last_pos = ext_log.stat().st_size if ext_log.exists() else 0
-
-    heartbeat_seconds = 30
-    poll_interval = 5
 
     while True:
         time.sleep(poll_interval)

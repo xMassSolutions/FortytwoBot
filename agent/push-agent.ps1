@@ -342,7 +342,7 @@ if ($Once) {
     return
 }
 
-Write-Output "Fortytwo agent starting. Mode: event-driven + 10-min heartbeat. Bot URL: $BotUrl"
+Write-Output "Fortytwo agent starting. Mode: event-driven + ${HeartbeatSeconds}s heartbeat. Bot URL: $BotUrl"
 
 # Bootstrap push so the bot has fresh data immediately on agent start
 $lastPushTime = [DateTime]::MinValue
@@ -363,7 +363,7 @@ $EventPattern = "Completed inference participation|Inference round \w+ completed
 while ($true) {
     Start-Sleep -Seconds $PollIntervalSeconds
 
-    # 10-min heartbeat (so bot snapshots survive its redeploys / silent periods)
+    # Heartbeat (so bot snapshots survive its redeploys / silent periods)
     if (((Get-Date) - $lastPushTime).TotalSeconds -ge $HeartbeatSeconds) {
         $now = Get-Date -Format "HH:mm:ss"
         Write-Output "[$now] heartbeat push"
