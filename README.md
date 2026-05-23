@@ -183,6 +183,119 @@ Caveats in Docker mode:
 
 ---
 
+## Managing the agent
+
+Day-to-day operations on the workstation running the agent. The bot side
+(Render) auto-deploys on every push to `main` — these commands only affect the
+local workstation agent.
+
+### Update (pull latest + restart)
+
+The most common ask: a new agent change has landed on `main` and you want to
+pick it up. The bot auto-deploys via Render, but the agent on your workstation
+runs from the cloned repo and has to be pulled manually.
+
+**Windows** (admin PowerShell):
+
+```powershell
+cd $env:USERPROFILE\FortytwoBot
+git pull
+Restart-ScheduledTask -TaskName FortytwoBotAgent
+```
+
+**macOS:**
+
+```bash
+cd ~/FortytwoBot
+git pull
+launchctl kickstart -k gui/$(id -u)/com.fortytwo.agent
+```
+
+### Restart (no code change)
+
+**Windows:**
+
+```powershell
+Restart-ScheduledTask -TaskName FortytwoBotAgent
+```
+
+**macOS:**
+
+```bash
+launchctl kickstart -k gui/$(id -u)/com.fortytwo.agent
+```
+
+### Stop
+
+**Windows:**
+
+```powershell
+Stop-ScheduledTask -TaskName FortytwoBotAgent
+```
+
+**macOS:**
+
+```bash
+launchctl unload ~/Library/LaunchAgents/com.fortytwo.agent.plist
+```
+
+### Start (after stop)
+
+**Windows:**
+
+```powershell
+Start-ScheduledTask -TaskName FortytwoBotAgent
+```
+
+**macOS:**
+
+```bash
+launchctl load ~/Library/LaunchAgents/com.fortytwo.agent.plist
+```
+
+### Status (is it running?)
+
+**Windows:**
+
+```powershell
+Get-ScheduledTaskInfo -TaskName FortytwoBotAgent
+```
+
+Shows `LastRunTime`, `LastTaskResult` (0 = success), and `NextRunTime`.
+
+**macOS:**
+
+```bash
+launchctl list | grep com.fortytwo.agent
+```
+
+First column is the PID (or `-` if not running); second is the last exit code.
+
+### View live logs
+
+**Windows:**
+
+```powershell
+Get-Content $env:USERPROFILE\FortytwoBot\agent\agent.log -Tail 20 -Wait
+```
+
+**macOS:**
+
+```bash
+tail -f ~/Library/Logs/fortytwo-agent.log
+```
+
+You should see a `push ok:` line every ~30 seconds (heartbeat) plus an extra
+one on each inference event.
+
+> **Why no auto-update?** This repo is still in beta — a bad commit landing on
+> `main` would silently propagate to every node with no rollback. Manual pulls
+> keep you in control. If you'd like an opt-in auto-update later (e.g. a flag
+> that polls `git ls-remote` every 30 min and exits to let the task restart
+> with the new code), file an issue.
+
+---
+
 ## Configuration
 
 ### Bot env vars (set in Render → Environment)
@@ -206,17 +319,7 @@ Caveats in Docker mode:
 
 ## Troubleshooting
 
-**Dashboard shows "No data" after a Render redeploy.** The bot's snapshot store is in-memory and resets on redeploy. Wait up to 10 min for the next heartbeat from the agent, or restart the agent:
-
-```powershell
-# Windows
-Restart-ScheduledTask -TaskName FortytwoBotAgent
-```
-
-```bash
-# macOS
-launchctl kickstart -k gui/$(id -u)/com.fortytwo.agent
-```
+**Dashboard shows "No data" after a Render redeploy.** The bot's snapshot store is in-memory and resets on redeploy. Wait up to 30 s for the next heartbeat from the agent, or restart it — see [Managing the agent → Restart](#restart-no-code-change).
 
 **Balance card shows `RPC error`.** The default `MONAD_RPC_URL` may be rate-limited. Set it to an alternate RPC endpoint in the Render dashboard.
 
