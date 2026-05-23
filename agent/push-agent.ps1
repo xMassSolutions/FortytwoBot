@@ -4,6 +4,7 @@ param(
     [int]$IntervalSeconds = 30,
     [Parameter(Mandatory=$true)]
     [string]$ScriptsRoot,
+    [string]$DockerContainer = $env:FORTYTWO_DOCKER_CONTAINER,
     [switch]$Once,
     [switch]$DryRun
 )
@@ -80,6 +81,47 @@ function Get-LogTail($path, $n = 100) {
         }
     } catch { }
     return ,$result.ToArray()
+}
+
+function Get-DockerProcessInfo($containerName) {
+    # Resolve Capsule + Protocol PIDs and container uptime from `docker top` / `docker inspect`.
+    # Returns null if container isn't running. Used when the FortyTwo node lives in a Docker
+    # container instead of native processes on the host.
+    $result = @{
+        capsulePid       = $null
+        protocolPid      = $null
+        capsuleAlive     = $false
+        protocolAlive    = $false
+        uptimeSeconds    = $null
+    }
+    if (-not $containerName) { return $result }
+    try {
+        $running = (& docker inspect --format='{{.State.Running}}' $containerName 2>$null) -join ''
+        if ($running.Trim() -ne 'true') { return $result }
+
+        $startedAt = (& docker inspect --format='{{.State.StartedAt}}' $containerName 2>$null) -join ''
+        if ($startedAt) {
+            try {
+                $start = [DateTimeOffset]::Parse($startedAt.Trim()).UtcDateTime
+                $result.uptimeSeconds = [int]((Get-Date).ToUniversalTime() - $start).TotalSeconds
+            } catch { }
+        }
+
+        $topOut = & docker top $containerName 2>$null
+        if ($topOut) {
+            foreach ($line in ($topOut -split "`n")) {
+                if ($line -match "FortytwoCapsule") {
+                    $cols = ($line -split '\s+') | Where-Object { $_ -ne '' }
+                    foreach ($c in $cols) { if ($c -match '^\d+$') { $result.capsulePid = [int]$c; $result.capsuleAlive = $true; break } }
+                }
+                if ($line -match "FortytwoProtocol") {
+                    $cols = ($line -split '\s+') | Where-Object { $_ -ne '' }
+                    foreach ($c in $cols) { if ($c -match '^\d+$') { $result.protocolPid = [int]$c; $result.protocolAlive = $true; break } }
+                }
+            }
+        }
+    } catch { }
+    return $result
 }
 
 function Get-GpuInfo {
@@ -239,13 +281,24 @@ function Get-NodeSnapshot {
         }
     }
 
-    $cap   = Get-Process FortytwoCapsule  -ErrorAction SilentlyContinue
-    $proto = Get-Process FortytwoProtocol -ErrorAction SilentlyContinue
-    $capPid   = if ($cap)   { $cap.Id }   else { $null }
-    $protoPid = if ($proto) { $proto.Id } else { $null }
-    $capUptime = $null
-    if ($cap -and $cap.StartTime) {
-        $capUptime = [int]((Get-Date) - $cap.StartTime).TotalSeconds
+    # Process detection: Docker container if -DockerContainer set, else native host processes.
+    $capPid = $null; $protoPid = $null; $capUptime = $null
+    $dockerProtoAlive = $false
+    if ($DockerContainer) {
+        $dockerInfo = Get-DockerProcessInfo $DockerContainer
+        $capPid           = $dockerInfo.capsulePid
+        $protoPid         = $dockerInfo.protocolPid
+        $capUptime        = $dockerInfo.uptimeSeconds   # container uptime (proxy for capsule uptime)
+        $dockerProtoAlive = $dockerInfo.protocolAlive
+    } else {
+        $cap   = Get-Process FortytwoCapsule  -ErrorAction SilentlyContinue
+        $proto = Get-Process FortytwoProtocol -ErrorAction SilentlyContinue
+        $capPid   = if ($cap)   { $cap.Id }   else { $null }
+        $protoPid = if ($proto) { $proto.Id } else { $null }
+        if ($cap -and $cap.StartTime) {
+            $capUptime = [int]((Get-Date) - $cap.StartTime).TotalSeconds
+        }
+        $dockerProtoAlive = [bool]$proto
     }
 
     # Capsule + Protocol versions from Capsule.log header lines
@@ -265,7 +318,7 @@ function Get-NodeSnapshot {
         $r = Invoke-WebRequest -Uri $ReadyUrl -UseBasicParsing -TimeoutSec 3
         if ($r.StatusCode -eq 200) { $capsuleAlive = $true }
     } catch { $capsuleAlive = $false }
-    $protocolAlive = [bool]$proto
+    $protocolAlive = $dockerProtoAlive
 
     # Rolling 30-day rounds history (persisted to rounds-history.json next to this script)
     $roundsHistory = Update-RoundsHistory $allToday $todayUtc $RoundsHistoryFile
@@ -274,8 +327,8 @@ function Get-NodeSnapshot {
     $gpu = Get-GpuInfo
 
     # Tail last 100 lines of each log
-    $logExtended = Get-LogTail $ExtLog 100
-    $logCapsule  = Get-LogTail $CapsuleLog 100
+    $logExtended = Get-LogTail $ExtLog 500
+    $logCapsule  = Get-LogTail $CapsuleLog 500
 
     return [ordered]@{
         ts                          = (Get-Date).ToUniversalTime().ToString("o")

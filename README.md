@@ -141,6 +141,42 @@ Uninstall:
 ./uninstall-mac.sh
 ```
 
+#### Docker (FortyTwo node runs in a container)
+
+If you run the node via Docker (e.g., the official [`fortytwo-p2p-inference-docker`](https://github.com/Fortytwo-Network/fortytwo-p2p-inference-docker) image), pass the container name so the agent uses `docker top` / `docker inspect` for process detection instead of host `pgrep` / `Get-Process`. The agent still runs natively on the host — it just queries Docker.
+
+Requirements:
+- The Docker container must expose the Capsule ready port (default `42442`) on the host (`-p 42442:42442` in `docker run`, or `ports:` in compose).
+- Bind-mount the scripts/log directory so the host can read `extended_log.txt` and `FortytwoNode/debug/FortytwoCapsule.log` (or symlink them to a host path).
+- The user running the agent needs permission to call `docker` (group `docker` on Linux, or admin on Windows).
+
+**Windows:**
+
+```powershell
+.\install-as-task.ps1 `
+    -BotUrl "https://<service>.onrender.com" `
+    -AgentToken "<your-agent-token>" `
+    -ScriptsRoot "C:\path\to\bind-mounted\scripts" `
+    -DockerContainer "fortytwo-p2p-inference"
+```
+
+**macOS / Linux:**
+
+```bash
+./install-mac.sh \
+    "https://<service>.onrender.com" \
+    "<your-agent-token>" \
+    "$HOME/path/to/bind-mounted/scripts" \
+    "fortytwo-p2p-inference"
+```
+
+The 4th positional argument is the container name. Leave it out for native (non-Docker) installs.
+
+Caveats in Docker mode:
+- `capsule_uptime_seconds` reports **container uptime** (proxy for Capsule uptime). If the Capsule restarts inside a long-running container, this won't reset.
+- GPU info still comes from host `nvidia-smi`. Works if the container uses `--gpus all` — `nvidia-smi` on the host sees all GPU activity (host + containers).
+- `capsule_alive` is determined by HTTP ready probe (same as native), so it's accurate as long as the ready port is mapped.
+
 ### 3. Open the dashboard
 
 `https://<service>.onrender.com/dashboard` — works on any browser. Bookmark or Add to Home Screen on your phone for an app-like icon.

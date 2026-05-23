@@ -2,6 +2,7 @@ param(
     [Parameter(Mandatory)] [string]$BotUrl,
     [Parameter(Mandatory)] [string]$AgentToken,
     [Parameter(Mandatory)] [string]$ScriptsRoot,
+    [string]$DockerContainer = "",
     [string]$TaskName = "FortytwoBotAgent"
 )
 
@@ -13,12 +14,13 @@ if (-not (Test-Path $script)) { throw "push-agent.ps1 not found at $script" }
 $wrapper = Join-Path $here "_agent-wrapper.ps1"
 $logFile = Join-Path $here "agent.log"
 
+$dockerArg = if ($DockerContainer) { "-DockerContainer '$DockerContainer' " } else { "" }
 $wrapperContent = @"
 `$env:FORTYTWO_BOT_URL = '$BotUrl'
 `$env:FORTYTWO_AGENT_TOKEN = '$AgentToken'
 while (`$true) {
     try {
-        & '$script' -ScriptsRoot '$ScriptsRoot' *>> '$logFile'
+        & '$script' -ScriptsRoot '$ScriptsRoot' $dockerArg*>> '$logFile'
     } catch {
         ('agent died: ' + `$_.Exception.Message + ' — restarting in 10s') | Out-File -FilePath '$logFile' -Append
         Start-Sleep -Seconds 10

@@ -264,6 +264,66 @@ def process_uptime_seconds(pid: int) -> int | None:
     return None
 
 
+# ---------- Docker process detection ----------
+
+
+def get_docker_process_info(container: str | None) -> dict[str, Any]:
+    """Resolve Capsule/Protocol PIDs + container uptime via Docker.
+
+    Returns {"capsule_pid", "protocol_pid", "protocol_alive", "uptime_seconds"}.
+    All values are None / False if container is unset or not running. Used when
+    the FortyTwo node runs in a Docker container instead of native host processes.
+    """
+    out: dict[str, Any] = {
+        "capsule_pid": None,
+        "protocol_pid": None,
+        "protocol_alive": False,
+        "uptime_seconds": None,
+    }
+    if not container:
+        return out
+    try:
+        r = subprocess.run(
+            ["docker", "inspect", "--format", "{{.State.Running}}", container],
+            capture_output=True, text=True, timeout=3,
+        )
+        if r.returncode != 0 or r.stdout.strip() != "true":
+            return out
+
+        r = subprocess.run(
+            ["docker", "inspect", "--format", "{{.State.StartedAt}}", container],
+            capture_output=True, text=True, timeout=3,
+        )
+        if r.returncode == 0 and r.stdout.strip():
+            from datetime import datetime as _dt
+            try:
+                started = _dt.fromisoformat(r.stdout.strip().replace("Z", "+00:00"))
+                out["uptime_seconds"] = int((utc_now() - started).total_seconds())
+            except Exception:
+                pass
+
+        r = subprocess.run(
+            ["docker", "top", container],
+            capture_output=True, text=True, timeout=3,
+        )
+        if r.returncode == 0 and r.stdout.strip():
+            for line in r.stdout.splitlines():
+                if "FortytwoCapsule" in line:
+                    for tok in line.split():
+                        if tok.isdigit():
+                            out["capsule_pid"] = int(tok)
+                            break
+                if "FortytwoProtocol" in line:
+                    for tok in line.split():
+                        if tok.isdigit():
+                            out["protocol_pid"] = int(tok)
+                            out["protocol_alive"] = True
+                            break
+    except Exception:
+        pass
+    return out
+
+
 # ---------- ready probe ----------
 
 
@@ -279,7 +339,11 @@ def capsule_ready(url: str = "http://localhost:42442/ready") -> bool:
 # ---------- snapshot construction ----------
 
 
-def get_node_snapshot(scripts_root: Path, history_file: Path) -> dict[str, Any]:
+def get_node_snapshot(
+    scripts_root: Path,
+    history_file: Path,
+    docker_container: str | None = None,
+) -> dict[str, Any]:
     ext_log = scripts_root / "extended_log.txt"
     capsule_log = scripts_root / "FortytwoNode" / "debug" / "FortytwoCapsule.log"
     today_utc = utc_today_str()
@@ -415,10 +479,18 @@ def get_node_snapshot(scripts_root: Path, history_file: Path) -> dict[str, Any]:
             model_short = last_hf.group(1)
             model = model_short
 
-    # Process detection
-    cap_pid = find_pid("FortytwoCapsule")
-    proto_pid = find_pid("FortytwoProtocol")
-    cap_uptime = process_uptime_seconds(cap_pid) if cap_pid else None
+    # Process detection: Docker container if configured, else native host processes.
+    if docker_container:
+        di = get_docker_process_info(docker_container)
+        cap_pid = di["capsule_pid"]
+        proto_pid = di["protocol_pid"]
+        cap_uptime = di["uptime_seconds"]   # container uptime as proxy for capsule uptime
+        proto_alive_override = di["protocol_alive"]
+    else:
+        cap_pid = find_pid("FortytwoCapsule")
+        proto_pid = find_pid("FortytwoProtocol")
+        cap_uptime = process_uptime_seconds(cap_pid) if cap_pid else None
+        proto_alive_override = None
 
     # Versions
     capsule_version: str | None = None
@@ -436,13 +508,16 @@ def get_node_snapshot(scripts_root: Path, history_file: Path) -> dict[str, Any]:
         protocol_version = last_pv.group(1)
 
     capsule_alive = capsule_ready()
-    protocol_alive = proto_pid is not None
+    protocol_alive = (
+        proto_alive_override if proto_alive_override is not None
+        else proto_pid is not None
+    )
 
     gpu = get_gpu_info()
 
     rounds_history = update_rounds_history(all_today, today_utc, history_file)
-    log_extended = get_log_tail(ext_log, 100)
-    log_capsule = get_log_tail(capsule_log, 100)
+    log_extended = get_log_tail(ext_log, 500)
+    log_capsule = get_log_tail(capsule_log, 500)
 
     return {
         "ts": utc_now_iso(),
@@ -529,7 +604,7 @@ def event_loop(args: argparse.Namespace, scripts_root: Path, history_file: Path)
     # Bootstrap push
     last_push = 0.0
     try:
-        post_snapshot(args.bot_url, args.agent_token, get_node_snapshot(scripts_root, history_file))
+        post_snapshot(args.bot_url, args.agent_token, get_node_snapshot(scripts_root, history_file, args.docker_container))
         last_push = time.time()
     except Exception as e:
         print(f"[bootstrap] {e}", flush=True)
@@ -545,7 +620,7 @@ def event_loop(args: argparse.Namespace, scripts_root: Path, history_file: Path)
             print(f"[{stamp}] heartbeat push", flush=True)
             try:
                 post_snapshot(
-                    args.bot_url, args.agent_token, get_node_snapshot(scripts_root, history_file)
+                    args.bot_url, args.agent_token, get_node_snapshot(scripts_root, history_file, args.docker_container)
                 )
                 last_push = time.time()
             except Exception as e:
@@ -577,7 +652,7 @@ def event_loop(args: argparse.Namespace, scripts_root: Path, history_file: Path)
                     post_snapshot(
                         args.bot_url,
                         args.agent_token,
-                        get_node_snapshot(scripts_root, history_file),
+                        get_node_snapshot(scripts_root, history_file, args.docker_container),
                     )
                     last_push = time.time()
                 except Exception as e:
@@ -603,6 +678,15 @@ def parse_args() -> argparse.Namespace:
         "--scripts-root",
         default=os.environ.get("FORTYTWO_SCRIPTS_ROOT"),
         help="Path to fortytwo-p2p-inference-scripts. Required (or FORTYTWO_SCRIPTS_ROOT env).",
+    )
+    p.add_argument(
+        "--docker-container",
+        default=os.environ.get("FORTYTWO_DOCKER_CONTAINER"),
+        help=(
+            "Name (or ID) of the Docker container running the FortyTwo node. When set, "
+            "process detection uses `docker top` / `docker inspect` instead of pgrep. "
+            "Defaults to FORTYTWO_DOCKER_CONTAINER env. Leave unset for native (non-Docker) installs."
+        ),
     )
     p.add_argument("--once", action="store_true", help="Push one snapshot and exit.")
     p.add_argument(
@@ -636,12 +720,12 @@ def main() -> int:
             return 2
 
     if args.dry_run:
-        snap = get_node_snapshot(scripts_root, history_file)
+        snap = get_node_snapshot(scripts_root, history_file, args.docker_container)
         print(json.dumps(snap, indent=2, default=str))
         return 0
 
     if args.once:
-        post_snapshot(args.bot_url, args.agent_token, get_node_snapshot(scripts_root, history_file))
+        post_snapshot(args.bot_url, args.agent_token, get_node_snapshot(scripts_root, history_file, args.docker_container))
         return 0
 
     try:

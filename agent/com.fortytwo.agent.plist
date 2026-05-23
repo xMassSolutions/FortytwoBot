@@ -14,6 +14,7 @@
         <string>{{AGENT_TOKEN}}</string>
         <string>--scripts-root</string>
         <string>{{SCRIPTS_ROOT}}</string>
+        {{EXTRA_ARGS}}
     </array>
     <key>RunAtLoad</key>
     <true/>

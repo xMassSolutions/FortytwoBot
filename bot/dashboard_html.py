@@ -92,10 +92,16 @@ a { color: var(--blue); text-decoration: none; }
 
   <div class="rounds-list" style="margin-top: 16px;">
     <div class="section-header">
-      <span class="section-title">Node log (last 100 lines)</span>
+      <span class="section-title">Node log (last 500 lines)</span>
       <span class="toggle-group">
         <button class="toggle-btn active" data-log="extended">extended</button>
         <button class="toggle-btn" data-log="capsule">capsule</button>
+      </span>
+    </div>
+    <div style="display:flex;justify-content:flex-end;margin-bottom:8px">
+      <span class="toggle-group">
+        <button class="toggle-btn active" data-logfilter="all">All</button>
+        <button class="toggle-btn" data-logfilter="events">Events</button>
       </span>
     </div>
     <pre id="log-view" class="log-view"></pre>
@@ -128,6 +134,8 @@ a { color: var(--blue); text-decoration: none; }
 let chart;
 let chartMode = 'hourly';
 let logMode = 'extended';
+let logFilter = 'all';
+const LOG_EVENT_RE = /Completed inference participation|Inference round \w+ completed|FOR balance (before|after) reward|Submitting intent resolution|Resolution of .* resolved|Node's balance is|Operator Wallet Address| ERROR /;
 let tpsMode = 'actual';
 let lastSnapshot = null;
 
@@ -213,8 +221,13 @@ function updateChart(history){
 function updateLog(s){
   const pre = document.getElementById('log-view');
   if (!s) { pre.textContent = '(no data)'; return; }
-  const lines = (logMode === 'extended' ? s.log_extended : s.log_capsule) || [];
-  pre.textContent = lines.length ? lines.join('\n') : '(no log lines received)';
+  let lines = (logMode === 'extended' ? s.log_extended : s.log_capsule) || [];
+  if (logFilter === 'events') {
+    lines = lines.filter(ln => LOG_EVENT_RE.test(ln));
+  }
+  pre.textContent = lines.length
+    ? lines.join('\n')
+    : (logFilter === 'events' ? '(no matching events in this window)' : '(no log lines received)');
 }
 
 function updateErrors(s){
@@ -384,6 +397,14 @@ document.querySelectorAll('.toggle-btn[data-log]').forEach(btn => {
   btn.addEventListener('click', () => {
     logMode = btn.dataset.log;
     document.querySelectorAll('.toggle-btn[data-log]').forEach(b => b.classList.toggle('active', b.dataset.log === logMode));
+    updateLog(lastSnapshot);
+  });
+});
+
+document.querySelectorAll('.toggle-btn[data-logfilter]').forEach(btn => {
+  btn.addEventListener('click', () => {
+    logFilter = btn.dataset.logfilter;
+    document.querySelectorAll('.toggle-btn[data-logfilter]').forEach(b => b.classList.toggle('active', b.dataset.logfilter === logFilter));
     updateLog(lastSnapshot);
   });
 });
