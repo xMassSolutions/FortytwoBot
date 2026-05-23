@@ -361,4 +361,4 @@ To remove the bot service: Render dashboard → service → **Settings** → **D
 
 ## License
 
-TBD.
+[MIT](LICENSE) © 2026 xMassSolutions — see the [LICENSE](LICENSE) file for full text.
