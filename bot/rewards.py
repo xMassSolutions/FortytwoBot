@@ -319,6 +319,12 @@ class RewardsTracker:
             r = rounds[orig_i]
             if r.get("tx_hash"):
                 continue
+            # Skip observer rounds — they didn't participate, didn't compute,
+            # got no on-chain reward. Default to True for backward compat with
+            # snapshots from pre-v8.6 agents that don't emit this field
+            # (better to over-pair legacy data than under-pair it).
+            if r.get("participated", True) is False:
+                continue
             iv = _round_interval(r)
             if iv is None:
                 continue

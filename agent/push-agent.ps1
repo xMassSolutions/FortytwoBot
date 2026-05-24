@@ -247,10 +247,23 @@ function Get-NodeSnapshot {
         }
     }
 
+    # Collect round hashes the node actually PARTICIPATED in
+    # ("Participating in inference request <hash>"). Observer rounds appear
+    # in the log as completed but never have a participate-marker, and
+    # therefore should NOT be paired with on-chain transfers (they didn't
+    # get any reward).
+    $participatedHashes = New-Object System.Collections.Generic.HashSet[string]
+    foreach ($line in $todayLines) {
+        if ($line -match "Participating in inference request (\w{40,})") {
+            [void]$participatedHashes.Add($matches[1])
+        }
+    }
+
     # Build all_today by walking all today_lines in order -- tracking the
     # most-recent "receipt hash 0x..." line (the on-chain Monad tx that paid
-    # the round's reward). Pair it with the next "Inference round X completed"
-    # line, then reset so the next round doesn't inherit it.
+    # the round's reward, when present in older Capsule log formats).
+    # Pair it with the next "Inference round X completed" line, then reset
+    # so the next round doesn't inherit it.
     $allToday = @()
     $lastReceiptHash = $null
     foreach ($line in $todayLines) {
@@ -259,12 +272,14 @@ function Get-NodeSnapshot {
             continue
         }
         if ($line -match "(\d{2}):(\d{2}):(\d{2}).*Inference round (\w+) completed.*Total time: (\d+)s") {
+            $roundHash = $matches[4]
             $allToday += [ordered]@{
                 completed_iso = ("{0}:{1}:{2}" -f $matches[1], $matches[2], $matches[3])
                 hour          = [int]$matches[1]
-                hash          = $matches[4]
+                hash          = $roundHash
                 duration_s    = [int]$matches[5]
                 tx_hash       = $lastReceiptHash
+                participated  = $participatedHashes.Contains($roundHash)
             }
             $lastReceiptHash = $null  # consumed
         }
