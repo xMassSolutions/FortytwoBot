@@ -247,23 +247,31 @@ class RewardsTracker:
         self,
         rounds: list[dict[str, Any]],
         today_date: str | None,
-        window_seconds: int = 60,
+        pad_seconds: int = 120,
     ) -> list[dict[str, Any]]:
         """Inject `tx_hash` into round dicts whose tx_hash is null/missing,
-        sourcing from `self.today_transfers` by nearest-time match.
+        sourcing from `self.today_transfers` by interval-overlap match.
 
         Why: recent Capsule versions stopped logging `Resolution of ...
         receipt hash 0x...` so the agent's parser can't pair tx hashes.
         Chain-side matching is format-independent and uses the authoritative
         Monad receipt.
 
-        Algorithm:
-        - Sort transfers + rounds by time.
-        - Greedy assignment in chronological order: each round claims the
-          nearest unused transfer within ±window_seconds.
-        - Returns a NEW list (doesn't mutate input).
-        - Rounds with a non-null tx_hash already populated by the agent are
-          left untouched.
+        Matching window — the chain settlement happens MID-ROUND (when the
+        Resolution call lands on-chain), not at the round-completed log
+        line. A round takes typically 3-5 min from "Participating" to
+        "completed", and the on-chain tx fires somewhere in that interval.
+        We compute `start_ts = completed_ts - duration_s` and accept any
+        transfer in `[start_ts - pad, completed_ts + pad]` as a candidate.
+        With pad=120s this covers the round's full execution window plus
+        2 min of slop on either side for chain-settlement jitter.
+
+        Greedy assignment: rounds in chronological order each claim the
+        unused transfer whose ts is closest to the round's mid-point, but
+        only if that transfer is inside the round's accepted window.
+
+        Returns a NEW list (doesn't mutate input). Rounds with a non-null
+        tx_hash already populated by the agent are left untouched.
 
         Pre-conditions: `today_date` is a "YYYY-MM-DD" string used to convert
         each round's `completed_iso` (HH:MM:SS) to a UTC epoch.
@@ -282,40 +290,53 @@ class RewardsTracker:
         )
         used: set[int] = set()
 
-        def _round_ts(r: dict[str, Any]) -> int | None:
+        def _round_interval(r: dict[str, Any]) -> tuple[int, int, int] | None:
+            """Return (start_ts, completed_ts, mid_ts) or None."""
             iso = r.get("completed_iso")
             if not iso:
                 return None
             try:
                 h, m, s = (int(x) for x in str(iso).split(":"))
-                return midnight_ts + h * 3600 + m * 60 + s
+                completed = midnight_ts + h * 3600 + m * 60 + s
+                duration = int(r.get("duration_s") or 0)
+                start = completed - duration
+                mid = (start + completed) // 2
+                return start, completed, mid
             except Exception:
                 return None
 
-        # Match greedily in chronological order so adjacent rounds claim
-        # adjacent transfers, even though `rounds` may be newest-first.
+        # Match greedily in chronological order (by completed_ts) so the
+        # earliest-completed unmatched round claims first.
+        def _completed(i: int) -> int:
+            iv = _round_interval(rounds[i])
+            return iv[1] if iv else 0
         order = sorted(
             range(len(rounds)),
-            key=lambda i: (_round_ts(rounds[i]) is None, _round_ts(rounds[i]) or 0),
+            key=lambda i: (_round_interval(rounds[i]) is None, _completed(i)),
         )
         matches: dict[int, str] = {}
         for orig_i in order:
             r = rounds[orig_i]
             if r.get("tx_hash"):
                 continue
-            rts = _round_ts(r)
-            if rts is None:
+            iv = _round_interval(r)
+            if iv is None:
                 continue
+            start_ts, completed_ts, mid_ts = iv
+            lo = start_ts - pad_seconds
+            hi = completed_ts + pad_seconds
             best_ai = None
-            best_delta = window_seconds + 1
+            best_delta = float("inf")
             for ai, (ts, _tx) in enumerate(avail):
                 if ai in used:
                     continue
-                d = abs(ts - rts)
+                if ts < lo or ts > hi:
+                    continue
+                d = abs(ts - mid_ts)
                 if d < best_delta:
                     best_delta = d
                     best_ai = ai
-            if best_ai is not None and best_delta <= window_seconds:
+            if best_ai is not None:
                 used.add(best_ai)
                 matches[orig_i] = avail[best_ai][1]
 
