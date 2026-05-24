@@ -368,13 +368,32 @@ function Get-NodeSnapshot {
             }
         }
     }
-    # Model file size on disk (GB). Path may be absolute or relative to ScriptsRoot.
+    # Model file size on disk (GB).
+    # The Capsule's "Using local LLM model: <path>" line may give a bare
+    # filename or a full path. On a typical install the GGUF lives in an
+    # HF cache layout like
+    # <ScriptsRoot>\FortytwoNode\model_cache\models--<org>--<repo>\snapshots\<sha>\<file>.gguf
+    # The <sha> changes between model updates so we can't hardcode it.
+    # Strategy: try direct paths first, then fall back to a recursive search
+    # under ScriptsRoot for any file matching the basename. First non-empty
+    # match wins (-Depth 6 keeps the walk bounded).
     if ($model) {
         $modelPath = $null
-        if (Test-Path -LiteralPath $model)                                     { $modelPath = $model }
-        elseif (Test-Path -LiteralPath (Join-Path $ScriptsRoot $model))        { $modelPath = (Join-Path $ScriptsRoot $model) }
+        if (Test-Path -LiteralPath $model)                              { $modelPath = $model }
+        elseif (Test-Path -LiteralPath (Join-Path $ScriptsRoot $model)) { $modelPath = (Join-Path $ScriptsRoot $model) }
+        if (-not $modelPath -and $modelShort) {
+            try {
+                $hit = Get-ChildItem -LiteralPath $ScriptsRoot -Recurse -Filter $modelShort -ErrorAction SilentlyContinue -Depth 6 |
+                       Where-Object { $_.Length -gt 0 } |
+                       Select-Object -First 1
+                if ($hit) { $modelPath = $hit.FullName }
+            } catch { }
+        }
         if ($modelPath) {
-            try { $modelSizeGb = [math]::Round((Get-Item -LiteralPath $modelPath).Length / 1GB, 2) } catch { }
+            try {
+                $size = (Get-Item -LiteralPath $modelPath).Length
+                if ($size -gt 0) { $modelSizeGb = [math]::Round($size / 1GB, 2) }
+            } catch { }
         }
     }
 

@@ -578,12 +578,35 @@ def get_node_snapshot(
             model_short = last_hf.group(1)
             model = model_short
 
-    # Model file size on disk (GB). Path may be absolute or relative to scripts_root.
+    # Model file size on disk (GB).
+    # The Capsule's "Using local LLM model: <path>" line may give a bare
+    # filename or a full path. On a typical install the GGUF lives in an
+    # HF cache layout like
+    # <scripts_root>/FortytwoNode/model_cache/models--<org>--<repo>/snapshots/<sha>/<file>.gguf
+    # The <sha> changes between model updates so we can't hardcode it.
+    # Strategy: try direct paths first, then fall back to rglob from
+    # scripts_root for any file matching the basename. First non-empty
+    # match wins.
     if model:
+        candidates: list[Path] = []
         for cand in (Path(model), scripts_root / model):
+            if cand.exists() and cand.is_file():
+                candidates.append(cand)
+        if not candidates and model_short:
             try:
-                if cand.exists() and cand.is_file():
-                    model_size_gb = round(cand.stat().st_size / (1024 ** 3), 2)
+                # rglob walks the whole tree. GGUF basenames are unique
+                # enough in practice that this is fast on typical installs.
+                for p in scripts_root.rglob(model_short):
+                    if p.is_file():
+                        candidates.append(p)
+                        break  # first match is enough
+            except Exception:
+                pass
+        for p in candidates:
+            try:
+                size = p.stat().st_size
+                if size > 0:
+                    model_size_gb = round(size / (1024 ** 3), 2)
                     break
             except Exception:
                 continue
