@@ -260,6 +260,13 @@ function updateChart(history, forByHour){
 function updateLog(s){
   const pre = document.getElementById('log-view');
   if (!s) { pre.textContent = '(no data)'; return; }
+  // Sticky scroll: if the user is already at (or within 20 px of) the bottom,
+  // auto-scroll to the new bottom after re-render. Otherwise preserve their
+  // current scrollTop so they can read older entries without being yanked.
+  // 20 px tolerates anti-aliasing rounding while still being tight enough
+  // that "scrolled up reading" doesn't count as "at bottom."
+  const wasAtBottom = (pre.scrollHeight - pre.scrollTop - pre.clientHeight) < 20;
+  const oldScrollTop = pre.scrollTop;
   let lines = (logMode === 'extended' ? s.log_extended : s.log_capsule) || [];
   if (logFilter === 'events') {
     lines = lines.filter(ln => LOG_EVENT_RE.test(ln));
@@ -267,9 +274,11 @@ function updateLog(s){
   pre.textContent = lines.length
     ? lines.join('\n')
     : (logFilter === 'events' ? '(no matching events in this window)' : '(no log lines received)');
-  // Auto-scroll to the newest line so users see the current entry on load /
-  // every refresh, instead of having to scroll down through 500 lines of history.
-  pre.scrollTop = pre.scrollHeight;
+  if (wasAtBottom) {
+    pre.scrollTop = pre.scrollHeight;
+  } else {
+    pre.scrollTop = oldScrollTop;
+  }
 }
 
 function updateErrors(s){

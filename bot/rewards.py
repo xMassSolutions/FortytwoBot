@@ -323,20 +323,25 @@ class RewardsTracker:
         Chain-side matching is format-independent and uses the authoritative
         Monad receipt.
 
-        Matching window — the chain settlement happens MID-ROUND or AFTER
-        (when the Resolution call lands on-chain). A round takes typically
-        3-5 min, and the on-chain tx can fire DURING the round OR up to
-        ~5 min AFTER round-completed if the resolution was deferred (see
-        "Waiting for N milliseconds before resolving intent" log lines —
-        261 s was observed in the wild).
-        We compute `start_ts = completed_ts - duration_s` and accept any
-        transfer in `[start_ts - pad, completed_ts + pad]` as a candidate.
-        v9.1 widened pad to 300s (was 120s) to cover the deferred-resolution
-        case which was causing 1-of-3 participation tx_hashes to miss.
-
-        Greedy assignment: rounds in chronological order each claim the
-        unused transfer whose ts is closest to the round's mid-point, but
-        only if that transfer is inside the round's accepted window.
+        Two-pass strategy (v10.1):
+          1. STRICT pass with `pad_seconds` (default 300 s) — for each
+             unmatched participation, take the closest unused transfer
+             whose ts falls inside `[start_ts - pad, completed_ts + pad]`.
+             Greedy in completed-ts order so earlier rounds claim first.
+          2. RELAXED pass with `pad_seconds * 6` (default 30 min) — for
+             rounds still unmatched after pass 1. Same `used` set so a
+             pass-1 winner can't be re-claimed.
+          Pass 2 catches:
+             - deferred-resolution rounds (the Capsule logs
+               `Waiting for N milliseconds before resolving intent`,
+               where N has been observed >5 min in the wild)
+             - rounds whose strict-window neighbor stole the tx
+        Risk acknowledged: pass 2 can mis-attribute. Since observer rounds
+        are already skipped (`participated: False`) and `used` prevents
+        stealing pass-1 winners, the worst case is "tx_hash points at a
+        nearby wallet credit rather than this exact round" — the operator
+        can verify on monadscan; showing `—` for half their participations
+        is worse UX.
 
         Returns a NEW list (doesn't mutate input). Rounds with a non-null
         tx_hash already populated by the agent are left untouched.
@@ -378,8 +383,8 @@ class RewardsTracker:
             except Exception:
                 return None
 
-        # Match greedily in chronological order (by completed_ts) so the
-        # earliest-completed unmatched round claims first.
+        # Pre-compute completion ts for ordering; rounds with no interval
+        # sink to the end and are skipped during the match.
         def _completed(i: int) -> int:
             iv = _round_interval(rounds[i])
             return iv[1] if iv else 0
@@ -388,36 +393,47 @@ class RewardsTracker:
             key=lambda i: (_round_interval(rounds[i]) is None, _completed(i)),
         )
         matches: dict[int, str] = {}
-        for orig_i in order:
-            r = rounds[orig_i]
-            if r.get("tx_hash"):
-                continue
-            # Skip observer rounds — they didn't participate, didn't compute,
-            # got no on-chain reward. Default to True for backward compat with
-            # snapshots from pre-v8.6 agents that don't emit this field
-            # (better to over-pair legacy data than under-pair it).
-            if r.get("participated", True) is False:
-                continue
-            iv = _round_interval(r)
-            if iv is None:
-                continue
-            start_ts, completed_ts, mid_ts = iv
-            lo = start_ts - pad_seconds
-            hi = completed_ts + pad_seconds
-            best_ai = None
-            best_delta = float("inf")
-            for ai, (ts, _tx) in enumerate(avail):
-                if ai in used:
+
+        def _do_pass(pad: int) -> None:
+            """Run one greedy pass: each unmatched participation claims the
+            unused transfer closest to its mid_ts within ±pad. Updates
+            `matches` and `used` in place."""
+            for orig_i in order:
+                if orig_i in matches:
+                    continue  # already matched in a previous pass
+                r = rounds[orig_i]
+                if r.get("tx_hash"):
+                    continue  # already has agent-attached tx
+                # Skip observer rounds. Default to True for backward compat
+                # with pre-v8.6 snapshots that don't emit `participated`.
+                if r.get("participated", True) is False:
                     continue
-                if ts < lo or ts > hi:
+                iv = _round_interval(r)
+                if iv is None:
                     continue
-                d = abs(ts - mid_ts)
-                if d < best_delta:
-                    best_delta = d
-                    best_ai = ai
-            if best_ai is not None:
-                used.add(best_ai)
-                matches[orig_i] = avail[best_ai][1]
+                start_ts, completed_ts, mid_ts = iv
+                lo = start_ts - pad
+                hi = completed_ts + pad
+                best_ai = None
+                best_delta = float("inf")
+                for ai, (ts, _tx) in enumerate(avail):
+                    if ai in used:
+                        continue
+                    if ts < lo or ts > hi:
+                        continue
+                    d = abs(ts - mid_ts)
+                    if d < best_delta:
+                        best_delta = d
+                        best_ai = ai
+                if best_ai is not None:
+                    used.add(best_ai)
+                    matches[orig_i] = avail[best_ai][1]
+
+        # Pass 1: strict window.
+        _do_pass(pad_seconds)
+        # Pass 2: relaxed window for leftovers. 6x covers deferred-
+        # resolution and overlapping-window losers without going wild.
+        _do_pass(pad_seconds * 6)
 
         # Rebuild in original order with matched tx_hashes injected.
         out: list[dict[str, Any]] = []
