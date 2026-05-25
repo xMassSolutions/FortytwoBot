@@ -115,6 +115,7 @@ class StatusPayload(BaseModel):
     model: str | None = None
     model_short: str | None = None
     model_size_gb: float | None = None
+    model_debug: dict | None = None
     capsule_max_tps: int | None = None
     capsule_version: str | None = None
     protocol_version: str | None = None
@@ -236,6 +237,7 @@ async def dashboard_data():
             "agent_version": s.agent_version,
             "model_short": s.model_short,
             "model_size_gb": s.model_size_gb,
+            "model_debug": s.model_debug,
             "capsule_max_tps": s.capsule_max_tps,
             "capsule_version": s.capsule_version,
             "protocol_version": s.protocol_version,

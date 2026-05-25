@@ -421,6 +421,9 @@ function Get-NodeSnapshot {
     $winsToday = $participations
 
     $model = $null; $modelShort = $null; $modelSizeGb = $null
+    # v9.1 diagnostic — exposed on snapshot so we can see why model_size_gb
+    # is null without asking the operator to run ad-hoc PS commands.
+    $modelDebug = [ordered]@{ direct_tried = $null; cache_path = $null; cache_exists = $false; subdirs_seen = 0; found_at = $null; size_bytes = $null; error = $null }
     if (Test-Path $CapsuleLog) {
         $modelLine = Select-String -Path $CapsuleLog -Pattern "Using local LLM model: (.+)$" | Select-Object -Last 1
         if ($modelLine) {
@@ -450,13 +453,18 @@ function Get-NodeSnapshot {
     # ScriptsRoot as a last resort if the HF layout doesn't match.
     if ($model) {
         $modelPath = $null
+        $modelDebug.direct_tried = $model
         if (Test-Path -LiteralPath $model)                              { $modelPath = $model }
         elseif (Test-Path -LiteralPath (Join-Path $ScriptsRoot $model)) { $modelPath = (Join-Path $ScriptsRoot $model) }
         # Explicit walk: model_cache -> models--*/ -> snapshots/ -> <sha>/ -> <file>
         if (-not $modelPath -and $modelShort) {
             $cachePath = Join-Path $ScriptsRoot "FortytwoNode\model_cache"
+            $modelDebug.cache_path = $cachePath
             if (Test-Path -LiteralPath $cachePath) {
-                foreach ($modelDir in @(Get-ChildItem -LiteralPath $cachePath -Directory -ErrorAction SilentlyContinue)) {
+                $modelDebug.cache_exists = $true
+                $dirs = @(Get-ChildItem -LiteralPath $cachePath -Directory -ErrorAction SilentlyContinue)
+                $modelDebug.subdirs_seen = $dirs.Count
+                foreach ($modelDir in $dirs) {
                     $snapsDir = Join-Path $modelDir.FullName "snapshots"
                     if (-not (Test-Path -LiteralPath $snapsDir)) { continue }
                     foreach ($shaDir in @(Get-ChildItem -LiteralPath $snapsDir -Directory -ErrorAction SilentlyContinue)) {
@@ -478,13 +486,15 @@ function Get-NodeSnapshot {
                        Where-Object { $_.Name -eq $modelShort -and $_.Length -gt 0 } |
                        Select-Object -First 1
                 if ($hit) { $modelPath = $hit.FullName }
-            } catch { }
+            } catch { $modelDebug.error = "recursive fallback: $($_.Exception.Message)" }
         }
         if ($modelPath) {
+            $modelDebug.found_at = $modelPath
             try {
                 $size = (Get-Item -LiteralPath $modelPath).Length
+                $modelDebug.size_bytes = $size
                 if ($size -gt 0) { $modelSizeGb = [math]::Round($size / 1GB, 2) }
-            } catch { }
+            } catch { $modelDebug.error = "Get-Item: $($_.Exception.Message)" }
         }
     }
 
@@ -547,6 +557,7 @@ function Get-NodeSnapshot {
         model                       = $model
         model_short                 = $modelShort
         model_size_gb               = $modelSizeGb
+        model_debug                 = $modelDebug
         capsule_max_tps             = $maxTps
         capsule_version             = $capsuleVersion
         protocol_version            = $protocolVersion

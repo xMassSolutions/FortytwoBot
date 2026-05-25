@@ -12,6 +12,9 @@ class Snapshot:
     model: str | None = None
     model_short: str | None = None
     model_size_gb: float | None = None
+    # v9.1 diagnostic — model-search breadcrumbs from the PS agent (None on
+    # macOS/Linux). Surfaced raw in /v1/dashboard-data for debugging only.
+    model_debug: dict[str, Any] | None = None
     capsule_max_tps: int | None = None
     capsule_version: str | None = None
     protocol_version: str | None = None

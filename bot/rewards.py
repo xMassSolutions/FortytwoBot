@@ -313,7 +313,7 @@ class RewardsTracker:
         self,
         rounds: list[dict[str, Any]],
         today_date: str | None,
-        pad_seconds: int = 120,
+        pad_seconds: int = 300,
     ) -> list[dict[str, Any]]:
         """Inject `tx_hash` into round dicts whose tx_hash is null/missing,
         sourcing from `self.today_transfers` by interval-overlap match.
@@ -323,14 +323,16 @@ class RewardsTracker:
         Chain-side matching is format-independent and uses the authoritative
         Monad receipt.
 
-        Matching window — the chain settlement happens MID-ROUND (when the
-        Resolution call lands on-chain), not at the round-completed log
-        line. A round takes typically 3-5 min from "Participating" to
-        "completed", and the on-chain tx fires somewhere in that interval.
+        Matching window — the chain settlement happens MID-ROUND or AFTER
+        (when the Resolution call lands on-chain). A round takes typically
+        3-5 min, and the on-chain tx can fire DURING the round OR up to
+        ~5 min AFTER round-completed if the resolution was deferred (see
+        "Waiting for N milliseconds before resolving intent" log lines —
+        261 s was observed in the wild).
         We compute `start_ts = completed_ts - duration_s` and accept any
         transfer in `[start_ts - pad, completed_ts + pad]` as a candidate.
-        With pad=120s this covers the round's full execution window plus
-        2 min of slop on either side for chain-settlement jitter.
+        v9.1 widened pad to 300s (was 120s) to cover the deferred-resolution
+        case which was causing 1-of-3 participation tx_hashes to miss.
 
         Greedy assignment: rounds in chronological order each claim the
         unused transfer whose ts is closest to the round's mid-point, but
