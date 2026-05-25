@@ -1,31 +1,28 @@
 # FortytwoBot — FortyTwo Network node monitor
 
-A self-hostable dashboard + workstation agent for monitoring a [FortyTwo Network](https://fortytwo.network/) inference node. Tracks rounds, wins/losses, FOR rewards on Monad Testnet, TPS, and node health — all in a single web dashboard you reach from any browser.
+Self-hostable dashboard + workstation agent for monitoring a [FortyTwo Network](https://fortytwo.network/) inference node. Tracks rounds, on-chain FOR rewards on Monad Testnet, TPS, and node health — all in one web dashboard reachable from any device.
 
-```
-   ┌──────────────────┐         ┌────────────────────┐
-   │ FortyTwo node    │ logs    │ Workstation agent  │ HTTPS push
-   │ (Windows / Mac)  │────────▶│ (PowerShell / Py)  │──────────────┐
-   └──────────────────┘         └────────────────────┘              │
-                                                                    ▼
-                                              ┌────────────────────────────┐
-                                              │ Bot + dashboard (Render)   │
-                                              │ FastAPI + Chart.js         │
-                                              │ /dashboard accessible from │
-                                              │ any device with the URL    │
-                                              └────────────────────────────┘
-```
+## Supported platforms
+
+| Layer | Options |
+|---|---|
+| **Bot host** | Render · Railway · any Docker host (`bot/Dockerfile`) |
+| **Agent OS** | Windows (Scheduled Task) · macOS (launchd) · Linux (systemd) |
+| **Node runtime** | Native (`pgrep` / `Get-Process`) · Docker (`docker top` / `docker inspect`) |
+| **GPU telemetry** | NVIDIA `nvidia-smi` (primary) · Windows WMI fallback · macOS `system_profiler` |
 
 ## What you get
 
-- **Live balance card** — FOR balance read from Monad Testnet RPC every 3 min, plus today's earned and wins count.
-- **Node card** — process status, capsule/protocol versions, uptime, plus a **Max / Actual** toggle for TPS and symbols-per-second.
-- **Today card (UTC)** — rounds participated, observed, errors, W/L counts and win rate.
-- **Rounds chart** — toggleable 24-hour, 7-day, or 4-week view of participation.
-- **Recent rounds, last 3 errors, last 100 log lines** — each in its own card.
-- **Multi-wallet watch** — track FOR + MONAD balances on any address.
+- **FOR balance card** — current FOR + MONAD balance, today's on-chain earned, distributions today, last reward (amount + time), refreshed every 30 s.
+- **Node card** — model + size on disk, GPU + VRAM, TPS / symbols/sec (Actual / Max toggle), Capsule + Protocol versions + PIDs, uptime.
+- **Today (UTC) card** — rounds participated, observed, errors, in-snapshot reward count, first / last round times.
+- **Rounds chart** — 24 h / 7 d / 4 w toggle. Tooltip shows rounds + FOR earned per bucket.
+- **Recent rounds** — completion time, duration, round hash, and clickable on-chain tx hash (opens monadscan).
+- **Node log** — last 500 lines, **All** / **Events** filter, auto-scrolled to newest.
+- **Multi-wallet watch** — FOR + MONAD balances for any Monad Testnet address.
+- **Auto-update** — agent self-pulls from `origin/main` every 30 min, restarts on the new code, surfaces the running SHA on the dashboard meta line.
 
-The dashboard URL works on phones, tablets, and desktops (responsive layout, Add-to-Home-Screen for app-like access).
+Responsive layout, Add-to-Home-Screen friendly.
 
 ---
 
