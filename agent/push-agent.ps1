@@ -421,7 +421,7 @@ function Get-NodeSnapshot {
     $winsToday = $participations
 
     $model = $null; $modelShort = $null; $modelSizeGb = $null
-    # v9.1 diagnostic — exposed on snapshot so we can see why model_size_gb
+    # v9.1 diagnostic -- exposed on snapshot so we can see why model_size_gb
     # is null without asking the operator to run ad-hoc PS commands.
     $modelDebug = [ordered]@{ direct_tried = $null; cache_path = $null; cache_exists = $false; subdirs_seen = 0; found_at = $null; size_bytes = $null; error = $null }
     if (Test-Path $CapsuleLog) {
