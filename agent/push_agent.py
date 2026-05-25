@@ -248,11 +248,17 @@ def filter_today_lines(content: str, today_utc: str) -> list[str]:
 
 
 PARTICIPATION_RE = re.compile(r"Completed inference participation")
-# v8.6 used "Participating in inference request <hash>" as the per-round
-# participation marker, but that line fires for EVERY round the node
-# sees (observer too). v8.7 reverts to walking the log and pairing
-# PARTICIPATION_RE (END-of-round, no hash) with the preceding
-# "Inference round X completed" line — see get_node_snapshot below.
+# v8.6 used "Participating in inference request <hash>" — fires for every
+# round (observer too), not a participation-specific signal.
+# v8.7 walked PARTICIPATION_RE (END-of-round, no hash) against preceding
+# "Inference round X completed" — worked until the Capsule stopped
+# emitting "Completed inference participation" entirely.
+# v9 adds DECIDED_HASH_RE — "Capsule has decided to participate in
+# inference request <hash>" — fires only when the node decides YES,
+# carries the round hash directly. Used as primary marker; v8.7's
+# walk-and-pair still runs as fallback for log entries that may still
+# have the old end-of-round marker.
+DECIDED_HASH_RE = re.compile(r"Capsule has decided to participate in inference request (\w{40,})")
 ROUND_LINE_RE = re.compile(r"Inference round.*Total time")
 ROUND_DETAIL_RE = re.compile(
     r"(\d{2}):(\d{2}):(\d{2}).*Inference round (\w+) completed.*Total time: (\d+)s"
@@ -413,7 +419,15 @@ def get_node_snapshot(
     ext_content = read_text(ext_log)
     today_lines = filter_today_lines(ext_content, today_utc)
 
-    participations = sum(1 for ln in today_lines if PARTICIPATION_RE.search(ln))
+    # Pre-scan: collect round hashes where the node decided to participate.
+    # This is the v9 primary participation marker (Capsule has decided to
+    # participate in inference request <hash>) -- it has the hash directly.
+    decided_hashes: set[str] = set()
+    for ln in today_lines:
+        m_d = DECIDED_HASH_RE.search(ln)
+        if m_d:
+            decided_hashes.add(m_d.group(1))
+
     round_lines = [ln for ln in today_lines if ROUND_LINE_RE.search(ln)]
     observed = len(round_lines)
 
@@ -477,9 +491,24 @@ def get_node_snapshot(
             last_receipt_hash = None  # consumed
             continue
         if PARTICIPATION_RE.search(ln) and pending_round_idx is not None:
-            # "Completed inference participation" — attribute to most recent round
+            # Legacy "Completed inference participation" — attribute to most recent
+            # round. Modern Capsule versions stopped emitting this so most
+            # tagging now comes from the decided_hashes union below.
             all_today[pending_round_idx]["participated"] = True
             pending_round_idx = None  # consumed
+
+    # v9 primary marker: union decided_hashes into per-round participated tag.
+    # "Capsule has decided to participate in inference request <hash>" fires
+    # only when the node decides YES, and carries the round hash directly.
+    for r in all_today:
+        if r["hash"] in decided_hashes:
+            r["participated"] = True
+
+    # Recompute participations count from the per-round tag (the legacy
+    # "Completed inference participation" line is ~0 in modern logs, so
+    # sum-of-PARTICIPATION_RE would under-report). wins_today already
+    # mirrors `participations` below.
+    participations = sum(1 for r in all_today if r.get("participated"))
 
     # Newest-first last 5 for /recent command parity (kept at 5)
     recent = list(reversed(all_today[-5:])) if all_today else []

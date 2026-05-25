@@ -227,6 +227,20 @@ function Get-NodeSnapshot {
         $todayLines = Select-String -Path $ExtLog -Pattern "^UTC $todayUtc" | ForEach-Object { $_.Line }
     }
 
+    # Pre-scan: collect round hashes the node DECIDED to participate in.
+    # v9 primary marker: "Capsule has decided to participate in inference
+    # request <hash>" fires only when the decision is yes and carries the
+    # round hash directly. (The older "Completed inference participation"
+    # line, which has no hash, was removed by a recent Capsule update.)
+    $decidedHashes = New-Object System.Collections.Generic.HashSet[string]
+    foreach ($line in $todayLines) {
+        if ($line -match "Capsule has decided to participate in inference request (\w{40,})") {
+            [void]$decidedHashes.Add($matches[1])
+        }
+    }
+    # Initial count from the legacy END-of-round marker (now ~0 in modern
+    # logs). Recomputed below from the per-round `participated` tag after
+    # all_today is built so the count matches what's tagged.
     $participations = @($todayLines | Where-Object { $_ -match "Completed inference participation" }).Count
     $roundLines     = @($todayLines | Where-Object { $_ -match "Inference round.*Total time" })
     $observed       = $roundLines.Count
@@ -291,7 +305,19 @@ function Get-NodeSnapshot {
             $pendingRoundIdx = -1
         }
     }
+    # v9 primary marker: union $decidedHashes into per-round participated tag.
+    foreach ($entry in $allToday) {
+        if ($decidedHashes.Contains($entry["hash"])) {
+            $entry["participated"] = $true
+        }
+    }
     $allToday = @($allToday)  # convert back to plain array for downstream consumers
+
+    # Recompute participations from the per-round tag (legacy
+    # "Completed inference participation" line is ~0 in modern logs, so the
+    # initial count from before would under-report). wins_today below
+    # already mirrors this.
+    $participations = @($allToday | Where-Object { $_.participated }).Count
     # newest-first list of last 5 for backward compat / /recent command
     $recent = @()
     foreach ($r in ($allToday | Select-Object -Last 5)) { $recent += $r }

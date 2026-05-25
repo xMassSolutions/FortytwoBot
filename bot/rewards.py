@@ -30,6 +30,7 @@ from chain import (
     get_latest_block,
     get_transfer_events,
 )
+from db import load_daily_totals, upsert_daily_total
 
 _TTL_SECONDS = 30.0
 # Monad's public testnet RPC (https://testnet-rpc.monad.xyz/) returns
@@ -75,17 +76,64 @@ class RewardsTracker:
     # Yesterday's transfers — preserved across UTC-midnight rollover so the
     # 24h rounds chart's earlier bars (which span yesterday's hours) can
     # show real FOR/hour in their tooltips instead of "—".
-    # Caveat: lost on Render redeploy until the next midnight rollover.
     yesterday_transfers: list[_Transfer] = field(default_factory=list)
     yesterday_utc_date: str | None = None
+    # Historical per-hour totals loaded from SQLite on startup. Keyed
+    # "YYYY-MM-DDTHH" so it stacks cleanly into transfers_by_hour without
+    # collisions. Survives container restarts inside a single deploy;
+    # NOT Render redeploys (filesystem is ephemeral on free tier).
+    historical_by_hour: dict[str, float] = field(default_factory=dict)
     last_scanned_block: int | None = None
     last_refresh_ts: float = 0.0
     last_error: str | None = None
+    _historical_loaded: bool = False  # one-shot guard for lazy load
+
+    def _ensure_historical_loaded(self) -> None:
+        """Load daily_totals rows from SQLite into self.historical_by_hour.
+        Called lazily on first refresh so we don't crash if db.py isn't
+        importable (e.g. during tests that stub the chain module)."""
+        if self._historical_loaded:
+            return
+        try:
+            for row in load_daily_totals():
+                for k, v in (row.get("by_hour") or {}).items():
+                    try:
+                        self.historical_by_hour[k] = float(v)
+                    except (TypeError, ValueError):
+                        continue
+        except Exception:
+            pass  # SQLite unavailable / empty — non-fatal
+        self._historical_loaded = True
+
+    def _persist_today(self) -> None:
+        """Upsert today's current state into the daily_totals table."""
+        if not self.today_utc_date:
+            return
+        by_hour: dict[str, float] = {}
+        for t in self.today_transfers:
+            dt = datetime.fromtimestamp(t.ts, tz=timezone.utc)
+            key = dt.strftime("%Y-%m-%dT%H")
+            by_hour[key] = by_hour.get(key, 0.0) + t.amount
+        try:
+            upsert_daily_total(
+                self.today_utc_date,
+                {k: round(v, 6) for k, v in by_hour.items()},
+                round(sum(t.amount for t in self.today_transfers), 6),
+                len(self.today_transfers),
+                time.time(),
+            )
+            # Also fold today's keys into historical_by_hour so subsequent
+            # summary() calls see the latest without re-reading SQLite.
+            for k, v in by_hour.items():
+                self.historical_by_hour[k] = round(v, 6)
+        except Exception:
+            pass  # non-fatal
 
     def _reset_for_new_day(self) -> None:
-        # Roll today -> yesterday before clearing so the 24h chart keeps
-        # yesterday's per-hour data available for tooltips.
+        # Persist the day we're leaving BEFORE clearing in-memory state, so
+        # we never lose a finished day to a poorly-timed redeploy.
         if self.today_transfers and self.today_utc_date:
+            self._persist_today()
             self.yesterday_transfers = self.today_transfers
             self.yesterday_utc_date = self.today_utc_date
         self.today_utc_date = _utc_today_str()
@@ -169,6 +217,9 @@ class RewardsTracker:
         now = time.time()
         today = _utc_today_str()
 
+        # Lazy-load persisted daily_totals on first refresh.
+        self._ensure_historical_loaded()
+
         # Day rollover
         if today != self.today_utc_date:
             self._reset_for_new_day()
@@ -249,6 +300,10 @@ class RewardsTracker:
             # Partial-success semantics: clear last_error if we made progress
             # (transfers got appended); keep error context if we made none.
             self.last_error = chunk_err if (chunk_err and not self.today_transfers) else None
+            # Persist today's state to SQLite so a container restart inside
+            # this deploy doesn't lose the data. (Render redeploys still
+            # wipe the SQLite file — see db.py header.)
+            self._persist_today()
         except Exception as e:
             # Keep last-known good state; surface error so dashboard can show it
             # rather than blanking the card.
@@ -375,9 +430,20 @@ class RewardsTracker:
         # Bucket transfers by UTC hour. Keys match the agent's
         # rounds_history format ("YYYY-MM-DDTHH") so the dashboard's
         # bucket() helper can reuse the same lookup pattern for tooltips.
-        # Includes BOTH today and yesterday so 24h chart bars that span
-        # the UTC-midnight boundary show real FOR data instead of "—".
-        by_hour: dict[str, float] = {}
+        # Includes today + yesterday (in-memory) + historical (SQLite),
+        # so 24h / 7d / 4w chart bars all get per-hour FOR data when
+        # the corresponding day was scanned at some point.
+        by_hour: dict[str, float] = dict(self.historical_by_hour)  # start with persisted history
+        # Today + yesterday in-memory state takes precedence (more recent)
+        for t in (*self.today_transfers, *self.yesterday_transfers):
+            dt = datetime.fromtimestamp(t.ts, tz=timezone.utc)
+            key = dt.strftime("%Y-%m-%dT%H")
+            # Recompute the hour bucket from the live list — for today this
+            # is more accurate than historical (historical is a snapshot,
+            # today is the source of truth).
+            if key.startswith(self.today_utc_date or "_"):
+                # Will be overwritten below in the second pass for today's keys
+                by_hour[key] = 0.0
         for t in (*self.today_transfers, *self.yesterday_transfers):
             dt = datetime.fromtimestamp(t.ts, tz=timezone.utc)
             key = dt.strftime("%Y-%m-%dT%H")
