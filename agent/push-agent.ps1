@@ -247,25 +247,25 @@ function Get-NodeSnapshot {
         }
     }
 
-    # Collect round hashes the node actually PARTICIPATED in
-    # ("Participating in inference request <hash>"). Observer rounds appear
-    # in the log as completed but never have a participate-marker, and
-    # therefore should NOT be paired with on-chain transfers (they didn't
-    # get any reward).
-    $participatedHashes = New-Object System.Collections.Generic.HashSet[string]
-    foreach ($line in $todayLines) {
-        if ($line -match "Participating in inference request (\w{40,})") {
-            [void]$participatedHashes.Add($matches[1])
-        }
-    }
-
-    # Build all_today by walking all today_lines in order -- tracking the
-    # most-recent "receipt hash 0x..." line (the on-chain Monad tx that paid
-    # the round's reward, when present in older Capsule log formats).
-    # Pair it with the next "Inference round X completed" line, then reset
-    # so the next round doesn't inherit it.
-    $allToday = @()
+    # Walk today_lines in order, building all_today with two pieces of
+    # state:
+    #   - $lastReceiptHash: paired with the next round-completed line as
+    #     tx_hash (legacy data from when older Capsule versions still
+    #     emitted "Resolution of ... receipt hash 0x...").
+    #   - $pendingRoundIdx: the index in $allToday of the most recent
+    #     "Inference round X completed" line. When we subsequently see
+    #     "Completed inference participation" (the END-of-round marker
+    #     that fires only for true participations, no hash), we tag that
+    #     round's dict participated=True.
+    #
+    # Note: "Completed inference participation" is the authoritative
+    # marker -- it's what $participations already counts. The earlier
+    # "Participating in inference request <hash>" line fires for EVERY
+    # round the node sees (observer too), so it can't be used to tag
+    # specific participations.
+    $allToday = New-Object System.Collections.ArrayList
     $lastReceiptHash = $null
+    $pendingRoundIdx = -1
     foreach ($line in $todayLines) {
         if ($line -match "receipt hash (0x[0-9a-fA-F]+)") {
             $lastReceiptHash = $matches[1]
@@ -273,17 +273,25 @@ function Get-NodeSnapshot {
         }
         if ($line -match "(\d{2}):(\d{2}):(\d{2}).*Inference round (\w+) completed.*Total time: (\d+)s") {
             $roundHash = $matches[4]
-            $allToday += [ordered]@{
+            $entry = [ordered]@{
                 completed_iso = ("{0}:{1}:{2}" -f $matches[1], $matches[2], $matches[3])
                 hour          = [int]$matches[1]
                 hash          = $roundHash
                 duration_s    = [int]$matches[5]
                 tx_hash       = $lastReceiptHash
-                participated  = $participatedHashes.Contains($roundHash)
+                participated  = $false   # promoted to $true by the END-of-round marker
             }
-            $lastReceiptHash = $null  # consumed
+            [void]$allToday.Add($entry)
+            $pendingRoundIdx = $allToday.Count - 1
+            $lastReceiptHash = $null
+            continue
+        }
+        if ($line -match "Completed inference participation" -and $pendingRoundIdx -ge 0) {
+            $allToday[$pendingRoundIdx]["participated"] = $true
+            $pendingRoundIdx = -1
         }
     }
+    $allToday = @($allToday)  # convert back to plain array for downstream consumers
     # newest-first list of last 5 for backward compat / /recent command
     $recent = @()
     foreach ($r in ($allToday | Select-Object -Last 5)) { $recent += $r }
@@ -406,20 +414,31 @@ function Get-NodeSnapshot {
     # HF cache layout like
     # <ScriptsRoot>\FortytwoNode\model_cache\models--<org>--<repo>\snapshots\<sha>\<file>.gguf
     # The <sha> changes between model updates so we can't hardcode it.
-    # Strategy: try direct paths first, then fall back to a recursive search
-    # under ScriptsRoot for any file matching the basename. First non-empty
-    # match wins (-Depth 6 keeps the walk bounded).
+    #
+    # Strategy: try direct paths first; if not found, search the HF cache
+    # root (fast, bounded) then fall back to ScriptsRoot (whole tree).
+    # v8.2 used -Depth + -Filter which silently returned nothing on the
+    # user's setup -- v8.7 drops both in favor of a plain -Recurse -File
+    # + Where-Object Name -eq which is exact-match and works regardless
+    # of depth.
     if ($model) {
         $modelPath = $null
         if (Test-Path -LiteralPath $model)                              { $modelPath = $model }
         elseif (Test-Path -LiteralPath (Join-Path $ScriptsRoot $model)) { $modelPath = (Join-Path $ScriptsRoot $model) }
         if (-not $modelPath -and $modelShort) {
-            try {
-                $hit = Get-ChildItem -LiteralPath $ScriptsRoot -Recurse -Filter $modelShort -ErrorAction SilentlyContinue -Depth 6 |
-                       Where-Object { $_.Length -gt 0 } |
-                       Select-Object -First 1
-                if ($hit) { $modelPath = $hit.FullName }
-            } catch { }
+            $candidateRoots = @(
+                (Join-Path $ScriptsRoot "FortytwoNode\model_cache"),  # known HF cache layout, fast
+                $ScriptsRoot                                            # fallback, whole tree
+            )
+            foreach ($root in $candidateRoots) {
+                if (-not (Test-Path -LiteralPath $root)) { continue }
+                try {
+                    $hit = Get-ChildItem -LiteralPath $root -Recurse -File -ErrorAction SilentlyContinue |
+                           Where-Object { $_.Name -eq $modelShort -and $_.Length -gt 0 } |
+                           Select-Object -First 1
+                    if ($hit) { $modelPath = $hit.FullName; break }
+                } catch { }
+            }
         }
         if ($modelPath) {
             try {

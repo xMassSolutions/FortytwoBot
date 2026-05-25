@@ -248,11 +248,11 @@ def filter_today_lines(content: str, today_utc: str) -> list[str]:
 
 
 PARTICIPATION_RE = re.compile(r"Completed inference participation")
-# Per-round participation marker — "Participating in inference request <hash>"
-# precedes the round-completed line for any round the node was a participant in.
-# Used to tag round dicts with `participated: bool` so the bot can avoid
-# attaching tx_hashes to observer rounds (which never get on-chain rewards).
-PARTICIPATE_HASH_RE = re.compile(r"Participating in inference request (\w{40,})")
+# v8.6 used "Participating in inference request <hash>" as the per-round
+# participation marker, but that line fires for EVERY round the node
+# sees (observer too). v8.7 reverts to walking the log and pairing
+# PARTICIPATION_RE (END-of-round, no hash) with the preceding
+# "Inference round X completed" line — see get_node_snapshot below.
 ROUND_LINE_RE = re.compile(r"Inference round.*Total time")
 ROUND_DETAIL_RE = re.compile(
     r"(\d{2}):(\d{2}):(\d{2}).*Inference round (\w+) completed.*Total time: (\d+)s"
@@ -436,24 +436,25 @@ def get_node_snapshot(
             last_round = m_last.group(1)
             last_duration = int(m_last.group(2))
 
-    # Collect the set of round hashes the node actually PARTICIPATED in
-    # ("Participating in inference request <hash>"). Observer rounds appear
-    # in the log as completed but never have a participate-marker, and
-    # therefore should NOT be paired with on-chain transfers (they didn't
-    # get any reward).
-    participated_hashes: set[str] = set()
-    for ln in today_lines:
-        m_p = PARTICIPATE_HASH_RE.search(ln)
-        if m_p:
-            participated_hashes.add(m_p.group(1))
-
-    # Build all_today by walking all today_lines in order — tracking the
-    # most-recent "receipt hash 0x…" line (the on-chain Monad tx that paid
-    # the round's reward, when present in older Capsule log formats).
-    # Pair it with the next "Inference round X completed" line, then reset
-    # so the next round doesn't inherit it.
+    # Walk today_lines in order, building all_today with two pieces of
+    # state:
+    #   - last_receipt_hash: paired with the next round-completed line as
+    #     `tx_hash` (legacy data from when older Capsule versions still
+    #     emitted "Resolution of ... receipt hash 0x...").
+    #   - pending_round_idx: the index in all_today of the most recent
+    #     "Inference round X completed" line. When we subsequently see
+    #     "Completed inference participation" (the END-of-round marker
+    #     that fires only for true participations, no hash), we tag that
+    #     round's dict `participated: True`.
+    #
+    # Note that PARTICIPATION_RE (Completed inference participation) is
+    # the authoritative participation marker — `rounds_participated_today`
+    # already counts it. The earlier "Participating in inference request
+    # <hash>" line fires for EVERY round the node sees (observer too), so
+    # it can't be used to tag specific participations.
     all_today: list[dict[str, Any]] = []
     last_receipt_hash: str | None = None
+    pending_round_idx: int | None = None
     for ln in today_lines:
         m_r = RECEIPT_HASH_RE.search(ln)
         if m_r:
@@ -469,10 +470,16 @@ def get_node_snapshot(
                     "hash": round_hash,
                     "duration_s": int(m.group(5)),
                     "tx_hash": last_receipt_hash,
-                    "participated": round_hash in participated_hashes,
+                    "participated": False,  # default; promoted to True by PARTICIPATION_RE below
                 }
             )
+            pending_round_idx = len(all_today) - 1
             last_receipt_hash = None  # consumed
+            continue
+        if PARTICIPATION_RE.search(ln) and pending_round_idx is not None:
+            # "Completed inference participation" — attribute to most recent round
+            all_today[pending_round_idx]["participated"] = True
+            pending_round_idx = None  # consumed
 
     # Newest-first last 5 for /recent command parity (kept at 5)
     recent = list(reversed(all_today[-5:])) if all_today else []
