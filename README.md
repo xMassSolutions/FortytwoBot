@@ -27,6 +27,42 @@ Responsive layout, Add-to-Home-Screen friendly.
 
 ---
 
+## Quick install (give this to an AI agent)
+
+If you have a coding agent with tool use (Claude, ChatGPT-with-tools, etc.), paste the prompt below and it can do the whole install for you. The [manual install](#install) further down covers the same ground if you'd rather drive it yourself.
+
+> Install the FortyTwo Network node monitoring stack from
+> `https://github.com/<your-fork>/FortytwoNetworkNode` for me.
+>
+> 1. Fork the repo to my GitHub account if I haven't already.
+> 2. Deploy the `bot/` service to my Render account using the blueprint at
+>    `render.yaml`. Prompt me for `WALLET` (my Monad Testnet operator wallet)
+>    and generate a random 40-char `AGENT_TOKEN`.
+> 3. Set up free [Neon](https://neon.tech) Postgres so reward history
+>    survives Render cold starts. Create a project in the region nearest
+>    my Render region, copy the pooled connection string, set it as
+>    `DATABASE_URL` in Render. (If I say I don't want this, skip and let
+>    the bot fall back to ephemeral SQLite.)
+> 4. (Optional, ask me first.) Lock the dashboard behind a login:
+>    generate a random password, hash it with `bcrypt.hashpw`, set
+>    `DASHBOARD_USER`, `DASHBOARD_PASS_HASH`, and a random hex
+>    `SESSION_SECRET` on Render. Tell me the password once at the end.
+> 5. Detect my OS and install the workstation agent for node 1:
+>    - Windows: `agent/install-as-task.ps1 -BotUrl <URL> -AgentToken <TOKEN> -ScriptsRoot <PATH>` where `<PATH>` is my `fortytwo-p2p-inference-scripts-main` folder.
+>    - macOS: `agent/install-mac.sh <URL> <TOKEN> <SCRIPTS_ROOT>`.
+>    - Linux: `agent/install-linux.sh <URL> <TOKEN> <SCRIPTS_ROOT>`.
+> 6. If I have a second node, repeat step 5 with `-NodeId 2 -NodeWallet 0x…`
+>    (or the equivalent for Mac/Linux).
+> 7. Open `<URL>/dashboard/1`, log in if I set up auth, and confirm
+>    the node stats are populating.
+> 8. Tell me the dashboard URL (and password if you set one) when done.
+>
+> Tools required: GitHub access (to fork), terminal access (to install the
+> agent), a Render account, and optionally a Neon account. Wallet address
+> must come from me — don't guess or auto-generate.
+
+---
+
 ## Install
 
 ### 1. Deploy the bot
