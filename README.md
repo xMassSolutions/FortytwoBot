@@ -79,10 +79,22 @@ openssl rand -hex 20
    |---|---|---|
    | `WALLET` | yes | Your Monad Testnet operator wallet (`0x…`) |
    | `AGENT_TOKEN` | yes | The shared secret you generated above |
+   | `DATABASE_URL` | recommended | Postgres connection string ([Neon](#durable-storage-neon-postgres) — see below). If unset, falls back to ephemeral SQLite and yesterday's chart bars vanish on every cold start. |
 
 5. **Apply**. First build is 3–5 min (Docker image build).
 6. Verify: open `https://<service>.onrender.com/healthz` — should return `{"ok":true}`.
 7. (Optional) **Custom domain**: Render → service → **Settings** → **Custom Domains**.
+
+##### Durable storage (Neon Postgres)
+
+Render's free tier wipes `/tmp` (where the bot's default SQLite lives) on every cold start and redeploy — so without Postgres your reward history disappears each time the service sleeps. Free Neon takes ~2 min to set up:
+
+1. Sign up at <https://neon.tech> (free, no card).
+2. **Create project**. Pick the region closest to your Render region.
+3. From the project dashboard copy the **pooled** connection string. It looks like `postgresql://user:pass@ep-xxxx-pooler.<region>.aws.neon.tech/neondb?sslmode=require`.
+4. Paste it as `DATABASE_URL` in your Render service's env vars and redeploy.
+
+The bot creates its tables on first boot. No manual schema setup needed.
 
 #### Railway (alternative)
 

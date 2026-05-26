@@ -16,3 +16,9 @@ services:
         value: 0xf6B888f442277F01294F94D555608A2E8Bc86430
       - key: MONAD_RPC_URL
         value: https://testnet-rpc.monad.xyz/
+      # Optional. When set, the bot persists daily totals and per-hour
+      # rounds history to Postgres (e.g. a free Neon project) so the
+      # dashboard chart survives Render cold starts. Without it the bot
+      # falls back to SQLite at /tmp -- ephemeral on the free tier.
+      - key: DATABASE_URL
+        sync: false

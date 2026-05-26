@@ -23,19 +23,18 @@ def add_watched(address: str, label: str | None = None) -> str:
         raise ValueError("invalid address")
     with get_conn() as conn:
         conn.execute(
-            "INSERT OR IGNORE INTO wallets (address, label, added_at) VALUES (?, ?, ?)",
+            "INSERT INTO wallets (address, label, added_at) VALUES (?, ?, ?) "
+            "ON CONFLICT (address) DO NOTHING",
             (addr, label, int(time.time())),
         )
-        conn.commit()
     return addr
 
 
 def list_watched() -> list[dict]:
     with get_conn() as conn:
-        rows = conn.execute(
+        return list(conn.execute(
             "SELECT address, label, added_at FROM wallets ORDER BY added_at DESC"
-        ).fetchall()
-    return [dict(r) for r in rows]
+        ))
 
 
 def remove_watched(address: str) -> bool:
@@ -43,6 +42,4 @@ def remove_watched(address: str) -> bool:
     if not addr:
         return False
     with get_conn() as conn:
-        cur = conn.execute("DELETE FROM wallets WHERE address=?", (addr,))
-        conn.commit()
-        return cur.rowcount > 0
+        return conn.execute("DELETE FROM wallets WHERE address = ?", (addr,)).rowcount > 0

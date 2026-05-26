@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field, field_validator
 import wallets as wstore
 from chain import get_for_balance, get_native_balance
 from dashboard_html import DASHBOARD_HTML
-from db import init_schema
+from db import init_schema, load_rounds_history, upsert_rounds_history
 from rewards import get_tracker
 from store import Snapshot, store
 
@@ -92,6 +92,25 @@ async def _cached_monad_balance(wallet: str) -> tuple[float | None, str | None]:
 # Multi-node: refreshes one tracker per distinct operator wallet seen across
 # all known nodes. The server's `WALLET` env var is always included as a
 # back-compat default for legacy agents (node-1 without node_wallet pushed).
+def _merge_rounds_history(node_id: int, live: dict[str, int] | None) -> dict[str, int]:
+    """Merge persisted rounds_history with the agent's current snapshot.
+    Live agent value wins per hour (it's >= persisted by DB upsert
+    semantics). Returns {} when neither source has anything."""
+    try:
+        merged: dict[str, int] = dict(load_rounds_history(node_id))
+    except Exception as e:  # pragma: no cover -- defensive
+        log.warning("load_rounds_history failed for node %d: %s", node_id, e)
+        merged = {}
+    for k, v in (live or {}).items():
+        try:
+            v_int = int(v)
+        except (TypeError, ValueError):
+            continue
+        if v_int > merged.get(k, 0):
+            merged[k] = v_int
+    return merged
+
+
 def _active_wallets() -> set[str]:
     wallets: set[str] = set()
     for nid in store.known_node_ids():
@@ -213,6 +232,14 @@ async def v1_status(payload: StatusPayload, authorization: str = Header(None)):
         )
     snap = Snapshot(received_at=time.time(), **payload.model_dump())
     store.set(snap)
+    # Mirror the agent's rolling per-hour rounds count into the DB so a
+    # workstation-side file loss can't blank out yesterday's chart bars.
+    # Upsert is MAX-merged in the DB layer, so an under-reporting push
+    # can't clobber a higher value.
+    try:
+        upsert_rounds_history(snap.node_id, snap.rounds_history)
+    except Exception as e:  # pragma: no cover -- defensive, never block a push
+        log.warning("rounds_history upsert failed for node %d: %s", snap.node_id, e)
     return {"ok": True, "received_at": snap.received_at}
 
 
@@ -360,7 +387,12 @@ async def dashboard_data(node: int = 1):
             "protocol_alive": s.protocol_alive,
             "recent_rounds": recent_rounds,
             "all_rounds_today": all_rounds_today,
-            "rounds_history": s.rounds_history,
+            # rounds_history is merged with the DB-persisted record so a
+            # workstation that lost agent/rounds-history.json still shows
+            # the older per-hour bars on the chart. Live agent values win
+            # for the current hour because they're strictly >= persisted
+            # (DB upsert is MAX-merged).
+            "rounds_history": _merge_rounds_history(node, s.rounds_history),
             "recent_errors": s.recent_errors,
             "log_extended": s.log_extended,
             "log_capsule": s.log_capsule,
