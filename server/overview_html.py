@@ -53,9 +53,14 @@ form#logout-form button:hover { color: var(--text); }
     <h1>FortyTwo Network: All Nodes</h1>
     <div class="meta"><span id="updated">loading…</span></div>
   </div>
-  <form id="logout-form" method="post" action="/logout" style="display:none">
-    <button type="submit">logout</button>
-  </form>
+  <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap">
+    <label style="font-size:12px;color:var(--muted);cursor:pointer;display:flex;gap:6px;align-items:center">
+      <input type="checkbox" id="show-placeholders" style="cursor:pointer"> show empty nodes
+    </label>
+    <form id="logout-form" method="post" action="/logout" style="display:none">
+      <button type="submit">logout</button>
+    </form>
+  </div>
 </header>
 
 <div id="totals" class="totals">
@@ -112,6 +117,21 @@ function renderNode(n){
     </a>
   `;
 }
+// Placeholder-nodes toggle. Server always returns {1,2} fallback so the
+// dashboard can show "about to come online" tiles, but for single-node ops
+// the empty Node-2 card is noise. Default off; persists per browser.
+function showPlaceholders(){
+  try { return localStorage.getItem('ft.overview.showPlaceholders') === '1'; } catch(_) { return false; }
+}
+const cbox = document.getElementById('show-placeholders');
+if (cbox) {
+  cbox.checked = showPlaceholders();
+  cbox.addEventListener('change', () => {
+    try { localStorage.setItem('ft.overview.showPlaceholders', cbox.checked ? '1' : '0'); } catch(_) {}
+    refresh();
+  });
+}
+
 async function refresh(){
   let data;
   try {
@@ -126,15 +146,24 @@ async function refresh(){
   const logoutForm = document.getElementById('logout-form');
   if (logoutForm) logoutForm.style.display = data.auth_enabled ? 'inline' : 'none';
 
+  // Filter empty placeholder tiles unless the operator opts in.
+  let nodes = data.nodes || [];
+  if (!showPlaceholders()) {
+    nodes = nodes.filter(n => n.received_at != null);
+  }
+
   const t = data.totals || {};
   document.getElementById('t-earned').textContent = fmtNum(t.earned_today);
   document.getElementById('t-earned-sub').textContent = (t.distinct_wallets || 0) + ' wallet' + ((t.distinct_wallets === 1) ? '' : 's');
-  document.getElementById('t-active').innerHTML = `${t.nodes_active || 0} <span style="color:var(--muted);font-size:13px;font-weight:400">of ${t.nodes_known || 0}</span>`;
-  document.getElementById('t-active-sub').textContent = (t.nodes_active === t.nodes_known) ? 'all up' : ((t.nodes_known - t.nodes_active) + ' missing');
+  const visibleKnown = showPlaceholders() ? (t.nodes_known || 0) : nodes.length;
+  document.getElementById('t-active').innerHTML = `${t.nodes_active || 0} <span style="color:var(--muted);font-size:13px;font-weight:400">of ${visibleKnown}</span>`;
+  document.getElementById('t-active-sub').textContent = (t.nodes_active === visibleKnown) ? 'all up' : ((visibleKnown - t.nodes_active) + ' missing');
   document.getElementById('t-rounds').textContent = fmtNum(t.rounds_participated_today);
 
   const grid = document.getElementById('nodes');
-  grid.innerHTML = (data.nodes || []).map(renderNode).join('');
+  grid.innerHTML = nodes.length
+    ? nodes.map(renderNode).join('')
+    : '<div style="color:var(--muted);font-size:13px;padding:20px;text-align:center;grid-column:1/-1">No nodes have pushed yet. Tick &ldquo;show empty nodes&rdquo; to see placeholders.</div>';
 }
 refresh();
 setInterval(refresh, 5000);

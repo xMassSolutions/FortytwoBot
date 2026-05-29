@@ -44,6 +44,23 @@ a { color: var(--blue); text-decoration: none; }
 .toggle-btn.active { background: var(--blue); color: #000; border-color: var(--blue); }
 .log-view { white-space: pre-wrap; max-height: 400px; overflow-y: auto; font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 11px; color: var(--muted); background: var(--bg); padding: 12px; border-radius: 6px; margin: 0; word-break: break-all; }
 .err-msg { color: var(--red); word-break: break-word; white-space: pre-wrap; font-size: 12px; }
+/* Per-card kebab (hamburger) settings menu. The card sets position:relative
+   and the popup floats anchored to the top-right corner. Click the icon to
+   open, click outside or the icon again to close. Each card carries its own
+   popup so toggles stay scoped to the data they affect. */
+.has-settings { position: relative; }
+.kebab-btn { background: transparent; border: 1px solid var(--border); color: var(--muted); width: 28px; height: 28px; border-radius: 4px; cursor: pointer; font-size: 14px; line-height: 1; padding: 0; display: inline-flex; align-items: center; justify-content: center; font-family: inherit; }
+.kebab-btn:hover { color: var(--text); border-color: var(--muted); }
+.kebab-btn.open { background: var(--blue); color: #000; border-color: var(--blue); }
+.settings-popup { position: absolute; bottom: 100%; right: 12px; margin-bottom: 8px; background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; z-index: 10; box-shadow: 0 -4px 16px rgba(0,0,0,0.4); display: flex; flex-direction: column; gap: 10px; min-width: 200px; }
+.settings-popup.open-below { bottom: auto; top: 44px; margin-bottom: 0; box-shadow: 0 4px 16px rgba(0,0,0,0.4); }
+.settings-popup[hidden] { display: none; }
+.settings-popup .pop-row { display: flex; align-items: center; gap: 10px; justify-content: space-between; }
+.settings-popup .pop-label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600; }
+/* FOR Balance card now also hosts the earnings projection so it's taller. */
+.balance-card { display: flex; flex-direction: column; }
+.projection-section { border-top: 1px solid var(--border); margin-top: 14px; padding-top: 14px; }
+.projection-section::before { content: 'Earnings projection'; display: block; font-size: 10px; text-transform: uppercase; color: var(--muted); letter-spacing: 0.5px; font-weight: 600; margin-bottom: 10px; }
 </style>
 </head>
 <body>
@@ -59,34 +76,48 @@ a { color: var(--blue); text-decoration: none; }
       <button class="toggle-btn" type="submit">logout</button>
     </form>
   </header>
-  <!-- Node tab strip — populated by JS from /v1/dashboard-data.known_nodes -->
-  <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;flex-wrap:wrap">
+  <!-- Back-link to the all-nodes overview. Per-node navigation lives there. -->
+  <div style="margin-bottom:16px">
     <a href="/dashboard" class="toggle-btn" style="text-decoration:none">&larr; All nodes</a>
-    <div class="toggle-group" id="node-tabs"></div>
   </div>
   <div class="grid">
-    <div class="card"><h2>FOR Balance (Monad Testnet)</h2><div id="balance-content">…</div></div>
-    <div class="card"><h2>Earnings projection</h2><div id="projection-content">…</div></div>
-    <div class="card">
-      <div class="section-header" style="margin-bottom:12px">
+    <div class="card balance-card">
+      <h2>FOR Balance (Monad Testnet)</h2>
+      <div id="balance-content">…</div>
+      <div id="projection-content" class="projection-section">…</div>
+    </div>
+    <div class="card has-settings">
+      <div class="section-header">
         <h2 id="node-title" style="margin-bottom:0">Node</h2>
-        <span class="toggle-group">
-          <button class="toggle-btn active" data-tps="actual">Actual</button>
-          <button class="toggle-btn" data-tps="max">Max</button>
-        </span>
+        <button class="kebab-btn" type="button" data-pop="node-pop" aria-label="Node settings" aria-expanded="false">&#9776;</button>
+      </div>
+      <div id="node-pop" class="settings-popup" hidden>
+        <div class="pop-row">
+          <span class="pop-label">TPS display</span>
+          <span class="toggle-group">
+            <button class="toggle-btn" data-tps="actual">Actual</button>
+            <button class="toggle-btn" data-tps="max">Max</button>
+          </span>
+        </div>
       </div>
       <div id="node-content">…</div>
     </div>
     <div class="card"><h2>Today (UTC)</h2><div id="today-content">…</div></div>
   </div>
-  <div class="chart-wrap">
+  <div class="chart-wrap has-settings">
     <div class="section-header">
       <span class="section-title">Rounds participated</span>
-      <span class="toggle-group">
-        <button class="toggle-btn active" data-mode="hourly">24h</button>
-        <button class="toggle-btn" data-mode="daily">7d</button>
-        <button class="toggle-btn" data-mode="weekly">4w</button>
-      </span>
+      <button class="kebab-btn" type="button" data-pop="chart-pop" aria-label="Chart settings" aria-expanded="false">&#9776;</button>
+    </div>
+    <div id="chart-pop" class="settings-popup" hidden>
+      <div class="pop-row">
+        <span class="pop-label">Chart period</span>
+        <span class="toggle-group">
+          <button class="toggle-btn" data-mode="hourly">24h</button>
+          <button class="toggle-btn" data-mode="daily">7d</button>
+          <button class="toggle-btn" data-mode="weekly">4w</button>
+        </span>
+      </div>
     </div>
     <canvas id="hourChart"></canvas>
   </div>
@@ -98,19 +129,26 @@ a { color: var(--blue); text-decoration: none; }
     </table>
   </div>
 
-  <div class="rounds-list" style="margin-top: 16px;">
+  <div class="rounds-list has-settings" style="margin-top: 16px;">
     <div class="section-header">
       <span class="section-title">Node log (last 500 lines)</span>
-      <span class="toggle-group">
-        <button class="toggle-btn active" data-log="extended">extended</button>
-        <button class="toggle-btn" data-log="capsule">capsule</button>
-      </span>
+      <button class="kebab-btn" type="button" data-pop="log-pop" aria-label="Log settings" aria-expanded="false">&#9776;</button>
     </div>
-    <div style="display:flex;justify-content:flex-end;margin-bottom:8px">
-      <span class="toggle-group">
-        <button class="toggle-btn active" data-logfilter="all">All</button>
-        <button class="toggle-btn" data-logfilter="events">Events</button>
-      </span>
+    <div id="log-pop" class="settings-popup" hidden>
+      <div class="pop-row">
+        <span class="pop-label">Source</span>
+        <span class="toggle-group">
+          <button class="toggle-btn" data-log="extended">extended</button>
+          <button class="toggle-btn" data-log="capsule">capsule</button>
+        </span>
+      </div>
+      <div class="pop-row">
+        <span class="pop-label">Filter</span>
+        <span class="toggle-group">
+          <button class="toggle-btn" data-logfilter="all">All</button>
+          <button class="toggle-btn" data-logfilter="events">Events</button>
+        </span>
+      </div>
     </div>
     <pre id="log-view" class="log-view"></pre>
   </div>
@@ -154,11 +192,21 @@ const NODE_ID = parseInt(location.pathname.split('/').filter(Boolean).pop()) || 
 document.title = 'FortyTwo Network: Node ' + NODE_ID;
 (function(){ const h = document.getElementById('h1-title'); if (h) h.textContent = 'FortyTwo Network: Node ' + NODE_ID; })();
 let chart;
-let chartMode = 'hourly';
-let logMode = 'extended';
-let logFilter = 'all';
+// Per-node localStorage prefs so switching nodes carries its own settings.
+// Wrapped in try/catch -- Safari private mode and disabled-storage browsers
+// throw on access. Fall back to the supplied default silently.
+function loadPref(key, fallback){
+  try { const v = localStorage.getItem('ft.' + key + '.node' + NODE_ID); return v == null ? fallback : v; }
+  catch(_) { return fallback; }
+}
+function savePref(key, value){
+  try { localStorage.setItem('ft.' + key + '.node' + NODE_ID, value); } catch(_) {}
+}
+let chartMode = loadPref('chartMode', 'hourly');
+let logMode = loadPref('logMode', 'extended');
+let logFilter = loadPref('logFilter', 'all');
 const LOG_EVENT_RE = /Completed inference participation|Inference round \w+ completed|FOR balance (before|after) reward|Submitting intent resolution|Resolution of .* resolved|Node's balance is|Operator Wallet Address| ERROR /;
-let tpsMode = 'actual';
+let tpsMode = loadPref('tpsMode', 'actual');
 let lastSnapshot = null;
 let lastChainRewards = null;  // most recent chain_rewards payload — needed by chart-mode toggle
 let lastUptime = null;        // most recent uptime payload — needed when re-rendering on toggles
@@ -424,16 +472,6 @@ async function refresh(){
     logoutForm.style.display = data.auth_enabled ? 'inline' : 'none';
   }
 
-  // Tab strip — re-rendered every refresh so a brand-new node appearing in
-  // known_nodes shows up without a page reload. Full <a> navigation between
-  // tabs (no SPA routing) keeps each page's state clean.
-  const tabsEl = document.getElementById('node-tabs');
-  if (tabsEl) {
-    tabsEl.innerHTML = (data.known_nodes || [1]).map(id =>
-      `<a class="toggle-btn ${id===NODE_ID?'active':''}" href="/dashboard/${id}" style="text-decoration:none">Node ${id}</a>`
-    ).join('');
-  }
-
   // Staleness threshold: heartbeat is 60s; flag anything older than 3 min
   // (3 missed heartbeats) as STALE to leave room for jitter / network blips
   // without false-positive flapping.
@@ -521,7 +559,6 @@ async function refresh(){
       + (monadStr ? `<div class="balance-reward" style="color:var(--muted)">${monadStr}</div>` : '')
       + (earned ? `<div class="balance-reward">+${fmtNum(earned)} FOR earned today${earnedSource}</div>` : '')
       + (cr.transfers_today ? `<div class="balance-reward" style="color:var(--muted)">${cr.transfers_today} distributions today</div>` : '')
-      + (s && s.wins_today ? `<div class="balance-reward" style="color:var(--muted)">${s.wins_today} wins today</div>` : '')
       + (lastAmt ? `<div class="balance-reward" style="color:var(--muted)">last +${fmtNum(lastAmt)} FOR at ${lastIso||'—'} UTC</div>` : '');
   } else {
     document.getElementById('balance-content').innerHTML = `<div style="color:var(--red);font-size:13px">RPC error: ${data.balance_error||'unknown'}</div>`;
@@ -589,10 +626,15 @@ document.getElementById('add-form').addEventListener('submit', async (e) => {
   }
 });
 
+function syncActive(attr, value){
+  document.querySelectorAll('.toggle-btn[data-' + attr + ']').forEach(b => b.classList.toggle('active', b.dataset[attr] === value));
+}
+
 document.querySelectorAll('.toggle-btn[data-mode]').forEach(btn => {
   btn.addEventListener('click', () => {
     chartMode = btn.dataset.mode;
-    document.querySelectorAll('.toggle-btn[data-mode]').forEach(b => b.classList.toggle('active', b.dataset.mode === chartMode));
+    savePref('chartMode', chartMode);
+    syncActive('mode', chartMode);
     updateChart(lastSnapshot ? lastSnapshot.rounds_history : {}, lastChainRewards ? lastChainRewards.transfers_by_hour : {});
   });
 });
@@ -600,7 +642,8 @@ document.querySelectorAll('.toggle-btn[data-mode]').forEach(btn => {
 document.querySelectorAll('.toggle-btn[data-log]').forEach(btn => {
   btn.addEventListener('click', () => {
     logMode = btn.dataset.log;
-    document.querySelectorAll('.toggle-btn[data-log]').forEach(b => b.classList.toggle('active', b.dataset.log === logMode));
+    savePref('logMode', logMode);
+    syncActive('log', logMode);
     updateLog(lastSnapshot);
   });
 });
@@ -608,7 +651,8 @@ document.querySelectorAll('.toggle-btn[data-log]').forEach(btn => {
 document.querySelectorAll('.toggle-btn[data-logfilter]').forEach(btn => {
   btn.addEventListener('click', () => {
     logFilter = btn.dataset.logfilter;
-    document.querySelectorAll('.toggle-btn[data-logfilter]').forEach(b => b.classList.toggle('active', b.dataset.logfilter === logFilter));
+    savePref('logFilter', logFilter);
+    syncActive('logfilter', logFilter);
     updateLog(lastSnapshot);
   });
 });
@@ -616,10 +660,82 @@ document.querySelectorAll('.toggle-btn[data-logfilter]').forEach(btn => {
 document.querySelectorAll('.toggle-btn[data-tps]').forEach(btn => {
   btn.addEventListener('click', () => {
     tpsMode = btn.dataset.tps;
-    document.querySelectorAll('.toggle-btn[data-tps]').forEach(b => b.classList.toggle('active', b.dataset.tps === tpsMode));
+    savePref('tpsMode', tpsMode);
+    syncActive('tps', tpsMode);
     if (lastSnapshot) renderNodeCard(lastSnapshot, lastUptime);
   });
 });
+
+// Sync the Settings-panel buttons' .active state to the current (possibly
+// localStorage-loaded) prefs once on init. Without this, the panel always
+// shows the FIRST button highlighted regardless of what's actually selected.
+syncActive('mode', chartMode);
+syncActive('tps', tpsMode);
+syncActive('log', logMode);
+syncActive('logfilter', logFilter);
+
+// Per-card kebab popups. Each ☰ button opens its sibling popup (the one
+// whose id matches the button's data-pop). Clicking the icon again or
+// anywhere outside the open popup closes it. Only one popup open at a time
+// -- opening a different card's menu auto-closes the first.
+(function(){
+  function closeAll(except){
+    document.querySelectorAll('.settings-popup').forEach(p => {
+      if (p === except) return;
+      if (!p.hasAttribute('hidden')) {
+        p.setAttribute('hidden', '');
+        const btn = document.querySelector(`.kebab-btn[data-pop="${p.id}"]`);
+        if (btn) { btn.classList.remove('open'); btn.setAttribute('aria-expanded', 'false'); }
+      }
+    });
+  }
+  // Default direction is "above" (opens upward). For cards near the top of
+  // the page that doesn't leave room, so we flip individual popups downward
+  // here by mutating CSS. Done on each open since the relevant heights/
+  // scroll position can change between opens.
+  function positionPopup(pop, btn){
+    // Reset any prior flip so we measure the natural upward layout first.
+    pop.classList.remove('open-below');
+    const btnRect = btn.getBoundingClientRect();
+    const needed = pop.offsetHeight + 12;  // popup height + breathing room
+    if (btnRect.top - needed < 0) {
+      pop.classList.add('open-below');
+    }
+  }
+  document.querySelectorAll('.kebab-btn[data-pop]').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const pop = document.getElementById(btn.dataset.pop);
+      if (!pop) return;
+      const wasHidden = pop.hasAttribute('hidden');
+      closeAll(wasHidden ? pop : null);
+      if (wasHidden) {
+        pop.removeAttribute('hidden');
+        // offsetHeight needs the popup to be visible to measure it.
+        positionPopup(pop, btn);
+        btn.classList.add('open');
+        btn.setAttribute('aria-expanded', 'true');
+      } else {
+        pop.setAttribute('hidden', '');
+        btn.classList.remove('open');
+        btn.setAttribute('aria-expanded', 'false');
+      }
+    });
+  });
+  // Click outside any open popup closes it. Clicks inside the popup
+  // (e.g. on a toggle button) don't bubble up to here because the popup
+  // stops at its own listener if needed; in practice the toggle handlers
+  // don't call stopPropagation, so we must filter by ancestor.
+  document.addEventListener('click', (e) => {
+    if (e.target.closest('.settings-popup')) return;  // click was inside a popup
+    if (e.target.closest('.kebab-btn')) return;       // handled by the button itself
+    closeAll(null);
+  });
+  // Escape key closes the open popup.
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closeAll(null);
+  });
+})();
 
 refresh();
 refreshWallets();
