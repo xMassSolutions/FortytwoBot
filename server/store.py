@@ -46,6 +46,7 @@ class Snapshot:
     gpu_name: str | None = None
     gpu_vram_used_mb: int | None = None
     gpu_vram_total_mb: int | None = None
+    gpu_power_w: float | None = None
     capsule_pid: int | None = None
     protocol_pid: int | None = None
     capsule_alive: bool = False

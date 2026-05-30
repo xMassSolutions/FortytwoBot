@@ -124,6 +124,7 @@ a { color: var(--blue); text-decoration: none; }
   <div class="chart-wrap has-settings">
     <div class="section-header">
       <span class="section-title">Rounds participated</span>
+      <span id="power-stat" style="margin-left:auto;font-size:12px;color:var(--muted);text-transform:none;letter-spacing:0;font-weight:400"></span>
       <button class="kebab-btn" type="button" data-pop="chart-pop" aria-label="Chart settings" aria-expanded="false">&#9776;</button>
     </div>
     <div id="chart-pop" class="settings-popup" hidden>
@@ -228,6 +229,7 @@ let tpsMode = loadPref('tpsMode', 'actual');
 let lastSnapshot = null;
 let lastChainRewards = null;  // most recent chain_rewards payload — needed by chart-mode toggle
 let lastUptime = null;        // most recent uptime payload — needed when re-rendering on toggles
+let lastPower = null;         // most recent power/energy payload — chart-card kW/kWh stat
 
 function pad(n){ return String(n).padStart(2,'0'); }
 function fmt(v){return v==null?'—':v;}
@@ -369,6 +371,18 @@ function updateChart(history, forByHour){
     chart.data.datasets[0].forPerBucket = forData;
     chart.update('none');
   }
+}
+
+// kW / kWh stat on the Rounds-participated card: live GPU draw + the energy
+// total for the period the chart toggle currently shows (24h->today, 7d, 4w).
+function updatePowerStat(){
+  const el = document.getElementById('power-stat'); if (!el) return;
+  const p = lastPower;
+  if (!p || (p.current_kw == null && !p.kwh_4w)) { el.textContent = ''; return; }
+  const kw = (p.current_kw != null) ? p.current_kw.toFixed(3) + ' kW' : '— kW';
+  const win = ({ hourly: ['kwh_today', 'today'], daily: ['kwh_7d', '7d'], weekly: ['kwh_4w', '4w'] })[chartMode]
+            || ['kwh_today', 'today'];
+  el.textContent = `⚡ ${kw} · ${fmtNum(p[win[0]] || 0)} kWh ${win[1]}`;
 }
 
 // FortyTwo brand colors (orange excluded) for the Today reward-outcome donut.
@@ -533,6 +547,7 @@ async function refresh(){
   { const h = document.getElementById('h1-title'); if (h) h.textContent = 'FortyTwo Network: ' + nodeLabel; }
   lastChainRewards = data.chain_rewards || null;
   lastUptime = data.uptime || null;
+  lastPower = data.power || null;
   document.getElementById('updated').textContent = 'updated '+new Date().toLocaleTimeString();
 
   // Reveal the logout button only when the server says auth is enabled.
@@ -622,6 +637,7 @@ async function refresh(){
   updateProjection(data.projections);
 
   updateChart(s ? s.rounds_history : {}, lastChainRewards ? lastChainRewards.transfers_by_hour : {});
+  updatePowerStat();
   updateErrors(s);
   updateLog(s);
 }
@@ -692,6 +708,7 @@ document.querySelectorAll('.toggle-btn[data-mode]').forEach(btn => {
     savePref('chartMode', chartMode);
     syncActive('mode', chartMode);
     updateChart(lastSnapshot ? lastSnapshot.rounds_history : {}, lastChainRewards ? lastChainRewards.transfers_by_hour : {});
+    updatePowerStat();
   });
 });
 

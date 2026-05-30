@@ -174,6 +174,19 @@ CREATE TABLE IF NOT EXISTS rounds (
 )
 """
 
+# Per-node daily energy rollup (kWh). The background sampler integrates the
+# node's reported GPU power (watts) over each tick into the current UTC day via
+# an additive upsert. One row per node per UTC day -> bounded + cheap.
+_DDL_ENERGY_DAILY = """
+CREATE TABLE IF NOT EXISTS energy_daily (
+    node_id      INTEGER NOT NULL,
+    utc_date     TEXT NOT NULL,
+    kwh          DOUBLE PRECISION NOT NULL,
+    last_updated DOUBLE PRECISION NOT NULL,
+    PRIMARY KEY (node_id, utc_date)
+)
+"""
+
 
 def init_schema() -> None:
     with _lock, get_conn() as conn:
@@ -188,6 +201,7 @@ def init_schema() -> None:
         conn.execute(_DDL_ROUNDS_HISTORY)
         conn.execute(_DDL_UPTIME_SAMPLES)
         conn.execute(_DDL_ROUNDS)
+        conn.execute(_DDL_ENERGY_DAILY)
 
 
 def upsert_daily_total(
@@ -320,6 +334,45 @@ def prune_uptime_samples_older_than(cutoff_ts: float) -> int:
             "DELETE FROM uptime_samples WHERE ts < ?",
             (float(cutoff_ts),),
         )
+        return cur.rowcount or 0
+
+
+def add_energy(node_id: int, utc_date: str, kwh_inc: float, ts: float) -> None:
+    """Add `kwh_inc` to the node's energy rollup for `utc_date` (additive upsert).
+    No-op for non-positive increments."""
+    if kwh_inc <= 0:
+        return
+    with _lock, get_conn() as conn:
+        conn.execute(
+            """
+            INSERT INTO energy_daily (node_id, utc_date, kwh, last_updated)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT (node_id, utc_date) DO UPDATE SET
+                kwh          = energy_daily.kwh + EXCLUDED.kwh,
+                last_updated = EXCLUDED.last_updated
+            """,
+            (node_id, utc_date, float(kwh_inc), ts),
+        )
+
+
+def load_energy_since(node_id: int, since_date: str) -> list[dict]:
+    """Return [{utc_date, kwh}] for the node on/after `since_date`
+    ("YYYY-MM-DD"), ordered by date."""
+    out: list[dict] = []
+    with _lock, get_conn() as conn:
+        for r in conn.execute(
+            "SELECT utc_date, kwh FROM energy_daily WHERE node_id = ? AND utc_date >= ? "
+            "ORDER BY utc_date",
+            (node_id, since_date),
+        ):
+            out.append({"utc_date": r["utc_date"], "kwh": float(r["kwh"] or 0.0)})
+    return out
+
+
+def prune_energy_daily_older_than(cutoff_date: str) -> int:
+    """Delete energy rows with utc_date < cutoff_date ("YYYY-MM-DD")."""
+    with _lock, get_conn() as conn:
+        cur = conn.execute("DELETE FROM energy_daily WHERE utc_date < ?", (cutoff_date,))
         return cur.rowcount or 0
 
 

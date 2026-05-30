@@ -196,16 +196,17 @@ def get_log_tail(path: Path, n: int = 100) -> list[str]:
 def get_gpu_info() -> dict[str, Any]:
     """Primary path: nvidia-smi (FortyTwo node = LLM inference = typically NVIDIA).
 
-    Returns {"name": str|None, "used": int|None, "total": int|None} in MB.
-    macOS fallback: system_profiler gives the chipset name only (no VRAM usage
-    CLI without paid tools).
+    Returns {"name": str|None, "used": int|None, "total": int|None,
+    "power_w": float|None}. used/total in MB; power_w = current draw in watts,
+    summed across all GPUs (multi-GPU rigs). macOS fallback: system_profiler
+    gives the chipset name only (no VRAM/power CLI without paid tools).
     """
-    out: dict[str, Any] = {"name": None, "used": None, "total": None}
+    out: dict[str, Any] = {"name": None, "used": None, "total": None, "power_w": None}
     try:
         r = subprocess.run(
             [
                 "nvidia-smi",
-                "--query-gpu=name,memory.used,memory.total",
+                "--query-gpu=name,memory.used,memory.total,power.draw",
                 "--format=csv,noheader,nounits",
             ],
             capture_output=True,
@@ -213,12 +214,23 @@ def get_gpu_info() -> dict[str, Any]:
             timeout=3,
         )
         if r.returncode == 0 and r.stdout.strip():
-            first = r.stdout.strip().splitlines()[0]
-            parts = [p.strip() for p in first.split(",")]
-            if len(parts) >= 3:
-                out["name"] = parts[0]
-                out["used"] = int(parts[1])
-                out["total"] = int(parts[2])
+            lines = r.stdout.strip().splitlines()
+            first = [p.strip() for p in lines[0].split(",")]
+            if len(first) >= 3:
+                out["name"] = first[0]
+                out["used"] = int(first[1])
+                out["total"] = int(first[2])
+            # Sum power.draw across every GPU row; "[N/A]" / unparseable -> skip.
+            total_w, got = 0.0, False
+            for ln in lines:
+                cols = [p.strip() for p in ln.split(",")]
+                if len(cols) >= 4:
+                    try:
+                        total_w += float(cols[3])
+                        got = True
+                    except ValueError:
+                        pass
+            out["power_w"] = round(total_w, 1) if got else None
     except Exception:
         pass
     if not out["name"]:
@@ -766,6 +778,7 @@ def get_node_snapshot(
         "gpu_name": gpu["name"],
         "gpu_vram_used_mb": gpu["used"],
         "gpu_vram_total_mb": gpu["total"],
+        "gpu_power_w": gpu["power_w"],
         "capsule_pid": cap_pid,
         "protocol_pid": proto_pid,
         "capsule_alive": capsule_alive,

@@ -21,12 +21,15 @@ from chain import get_for_balance, get_native_balance
 from dashboard_html import DASHBOARD_HTML
 from overview_html import OVERVIEW_HTML
 from db import (
+    add_energy,
     init_schema,
     insert_uptime_sample,
+    load_energy_since,
     load_round_tx,
     load_rounds,
     load_rounds_history,
     load_uptime_samples_since,
+    prune_energy_daily_older_than,
     prune_uptime_samples_older_than,
     today_round_summary,
     upsert_rounds,
@@ -117,6 +120,40 @@ def _today_summary(node: int) -> dict | None:
         return slot["data"] if slot else None
     _today_cache[node] = {"data": data, "ts": now}
     return data
+
+
+# Power/energy summary for the chart card. current_kw is live (from the
+# snapshot); the kWh windows come from the energy_daily rollup, cached ~30s.
+_POWER_TTL = 30.0
+_power_cache: dict[int, dict] = {}          # node_id → {windows, ts}
+
+
+def _power_summary(node: int) -> dict:
+    """{current_kw, kwh_today, kwh_7d, kwh_4w}. current_kw = live GPU draw in kW
+    (None if not reported); kWh windows summed from energy_daily (cached)."""
+    snap = store.get(node)
+    current_kw = (round(snap.gpu_power_w / 1000.0, 3)
+                  if snap is not None and snap.gpu_power_w else None)
+    now = time.time()
+    slot = _power_cache.get(node)
+    if slot and now - slot["ts"] < _POWER_TTL:
+        windows = slot["windows"]
+    else:
+        try:
+            since = time.strftime("%Y-%m-%d", time.gmtime(now - 27 * 24 * 3600))
+            by_date = {r["utc_date"]: r["kwh"] for r in load_energy_since(node, since)}
+            today = time.strftime("%Y-%m-%d", time.gmtime(now))
+            d7 = time.strftime("%Y-%m-%d", time.gmtime(now - 6 * 24 * 3600))
+            windows = {
+                "kwh_today": round(by_date.get(today, 0.0), 3),
+                "kwh_7d": round(sum(v for d, v in by_date.items() if d >= d7), 3),
+                "kwh_4w": round(sum(by_date.values()), 3),
+            }
+            _power_cache[node] = {"windows": windows, "ts": now}
+        except Exception as e:
+            log.warning("power summary failed for node %d: %s", node, e)
+            windows = slot["windows"] if slot else {"kwh_today": 0.0, "kwh_7d": 0.0, "kwh_4w": 0.0}
+    return {"current_kw": current_kw, **windows}
 
 
 # Hard per-request RPC ceiling. The cache absorbs sustained traffic; this just
@@ -399,10 +436,20 @@ async def _background_uptime_sampler() -> None:
             # first push -- which is exactly what we want, otherwise we'd
             # backfill "0% for the last 7d" for a node that just came online.
             for nid in store.known_node_ids():
+                snap = store.get(nid)
+                alive = _is_alive(snap, now)
                 try:
-                    insert_uptime_sample(nid, now, _is_alive(store.get(nid), now))
+                    insert_uptime_sample(nid, now, alive)
                 except Exception as e:  # pragma: no cover -- defensive
                     log.warning("uptime sample insert failed for node %d: %s", nid, e)
+                # Accrue energy: integrate the node's reported GPU watts over this
+                # tick, but only while it's up AND actually reporting power.
+                if alive and snap is not None and snap.gpu_power_w:
+                    try:
+                        add_energy(nid, time.strftime("%Y-%m-%d", time.gmtime(now)),
+                                   snap.gpu_power_w * UPTIME_SAMPLE_INTERVAL_SECS / 3.6e6, now)
+                    except Exception as e:  # pragma: no cover -- defensive
+                        log.warning("energy accrue failed for node %d: %s", nid, e)
             if (now - last_prune) >= _UPTIME_PRUNE_EVERY_SECS:
                 cutoff = now - UPTIME_RETENTION_DAYS * 24 * 3600.0
                 try:
@@ -412,6 +459,11 @@ async def _background_uptime_sampler() -> None:
                                  deleted, UPTIME_RETENTION_DAYS)
                 except Exception as e:  # pragma: no cover
                     log.warning("uptime prune failed: %s", e)
+                try:
+                    prune_energy_daily_older_than(
+                        time.strftime("%Y-%m-%d", time.gmtime(now - 35 * 24 * 3600)))
+                except Exception as e:  # pragma: no cover
+                    log.warning("energy prune failed: %s", e)
                 last_prune = now
         except asyncio.CancelledError:
             raise
@@ -483,6 +535,7 @@ class StatusPayload(BaseModel):
     gpu_name: str | None = None
     gpu_vram_used_mb: int | None = None
     gpu_vram_total_mb: int | None = None
+    gpu_power_w: float | None = None
     capsule_pid: int | None = None
     protocol_pid: int | None = None
     capsule_alive: bool = False
@@ -804,6 +857,7 @@ async def dashboard_data(node: int = 1, _: None = Depends(require_login_json)):
             "gpu_name": s.gpu_name,
             "gpu_vram_used_mb": s.gpu_vram_used_mb,
             "gpu_vram_total_mb": s.gpu_vram_total_mb,
+            "gpu_power_w": s.gpu_power_w,
             "capsule_pid": s.capsule_pid,
             "protocol_pid": s.protocol_pid,
             "capsule_alive": s.capsule_alive,
@@ -832,6 +886,7 @@ async def dashboard_data(node: int = 1, _: None = Depends(require_login_json)):
         "chain_rewards": chain_rewards,
         "projections": projections,
         "today": _today_summary(node),
+        "power": _power_summary(node),
         "node_name": await _cached_node_name(wallet),
         "uptime": _uptime_for_node(node),
         "wallet": wallet,

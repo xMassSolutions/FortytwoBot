@@ -203,17 +203,27 @@ function Get-DockerProcessInfo($containerName) {
 
 function Get-GpuInfo {
     # Primary path: nvidia-smi (FortyTwo node = LLM inference = typically NVIDIA)
-    $gpuName = $null; $vramUsed = $null; $vramTotal = $null
+    $gpuName = $null; $vramUsed = $null; $vramTotal = $null; $powerW = $null
     try {
-        $out = & nvidia-smi --query-gpu=name,memory.used,memory.total --format=csv,noheader,nounits 2>$null
+        $out = & nvidia-smi --query-gpu=name,memory.used,memory.total,power.draw --format=csv,noheader,nounits 2>$null
         if ($LASTEXITCODE -eq 0 -and $out) {
-            $first = ($out -split "`n")[0]
-            $parts = $first -split ',\s*'
-            if ($parts.Count -ge 3) {
-                $gpuName   = $parts[0].Trim()
-                $vramUsed  = [int]$parts[1].Trim()
-                $vramTotal = [int]$parts[2].Trim()
+            $lines = @($out -split "`n" | Where-Object { $_.Trim() -ne '' })
+            $first = $lines[0] -split ',\s*'
+            if ($first.Count -ge 3) {
+                $gpuName   = $first[0].Trim()
+                $vramUsed  = [int]$first[1].Trim()
+                $vramTotal = [int]$first[2].Trim()
             }
+            # Sum power.draw across every GPU row; non-numeric (e.g. [N/A]) skipped.
+            $sum = 0.0; $got = $false
+            foreach ($ln in $lines) {
+                $c = $ln -split ',\s*'
+                if ($c.Count -ge 4) {
+                    $p = 0.0
+                    if ([double]::TryParse($c[3].Trim(), [ref]$p)) { $sum += $p; $got = $true }
+                }
+            }
+            if ($got) { $powerW = [math]::Round($sum, 1) }
         }
     } catch { }
     # Fallback: WMI for the name on non-NVIDIA boxes (VRAM via WMI is unreliable)
@@ -223,7 +233,7 @@ function Get-GpuInfo {
             if ($g) { $gpuName = $g.Name }
         } catch { }
     }
-    return @{ name = $gpuName; used = $vramUsed; total = $vramTotal }
+    return @{ name = $gpuName; used = $vramUsed; total = $vramTotal; power_w = $powerW }
 }
 
 function Get-NodeSnapshot {
@@ -609,6 +619,7 @@ function Get-NodeSnapshot {
         gpu_name                    = $gpu.name
         gpu_vram_used_mb            = $gpu.used
         gpu_vram_total_mb           = $gpu.total
+        gpu_power_w                 = $gpu.power_w
         capsule_pid                 = $capPid
         protocol_pid                = $protoPid
         capsule_alive               = $capsuleAlive
