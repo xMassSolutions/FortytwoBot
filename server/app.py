@@ -588,6 +588,35 @@ def _prefill_persisted_tx(
     return out
 
 
+def _chain_authoritative_rounds(tracker, rounds: list[dict],
+                                persisted: dict[str, tuple[str, float | None]],
+                                day: str) -> list[dict]:
+    """The chain matcher is the SOLE authority for tx attribution: drop any
+    agent-supplied tx_hash, restore prior chain-matched (deduped) tx from the
+    DB (`persisted`) so a transfer can't be re-attached to a second round, then
+    let the matcher fill everything still unclaimed. Shared by the persist and
+    dashboard paths so they can't drift (that drift was the v18->v22 bug)."""
+    base = [{k: v for k, v in r.items() if k != "tx_hash"} for r in rounds]
+    return tracker.attach_tx_hashes(_prefill_persisted_tx(base, persisted), day)
+
+
+# Cache for the dashboard read path's persisted-tx lookup. The persist path
+# (per push) reads FRESH so cross-push memory stays exact; the dashboard polls
+# every 5s and only needs display consistency, so cache ~30s to spare the DB.
+_ROUND_TX_TTL = 30.0
+_round_tx_cache: dict[int, dict] = {}       # node_id -> {map, day, ts}
+
+
+def _cached_round_tx(node: int, day: str) -> dict[str, tuple[str, float | None]]:
+    now = time.time()
+    slot = _round_tx_cache.get(node)
+    if slot and slot["day"] == day and now - slot["ts"] < _ROUND_TX_TTL:
+        return slot["map"]
+    m = load_round_tx(node, day)
+    _round_tx_cache[node] = {"map": m, "day": day, "ts": now}
+    return m
+
+
 @app.post("/v1/status")
 async def v1_status(payload: StatusPayload, authorization: str = Header(None)):
     _require_agent_token(authorization)
@@ -621,22 +650,11 @@ async def v1_status(payload: StatusPayload, authorization: str = Header(None)):
         if snap.all_rounds_today and snap_date:
             if wallet_for_persist:
                 # The chain matcher is the SOLE authority for tx attribution.
-                # 1) Drop any agent-supplied tx_hash (legacy receipt-hash
-                #    parsing): it attributes by log proximity and can disagree
-                #    with the chain match, stamping one on-chain transfer onto a
-                #    second round (the [amt, None] duplicate class).
-                # 2) Restore prior chain-matched tx from the DB (cross-push
-                #    stability) so a transfer already assigned to one round is in
-                #    `already_claimed` and can't be re-attached to another round
-                #    on a later push (the [amt, amt] duplicate class).
-                # 3) Let the matcher attribute everything still unclaimed.
-                base = [{k: v for k, v in r.items() if k != "tx_hash"}
-                        for r in snap.all_rounds_today]
+                # Read FRESH (not cached) so cross-push memory is exact.
                 persisted = load_round_tx(snap.node_id, snap_date)
-                rounds_in = _prefill_persisted_tx(base, persisted)
-                enriched = get_tracker(wallet_for_persist).attach_tx_hashes(
-                    rounds_in, snap_date
-                )
+                enriched = _chain_authoritative_rounds(
+                    get_tracker(wallet_for_persist), snap.all_rounds_today,
+                    persisted, snap_date)
             else:
                 enriched = snap.all_rounds_today
             upsert_rounds(snap.node_id, enriched, snap_date, snap.received_at)
@@ -813,27 +831,15 @@ async def dashboard_data(node: int = 1, _: None = Depends(require_login_json)):
     snapshot_dict = None
     if s:
         if wallet:
-            # Chain matcher is the SOLE authority for tx attribution on the
-            # dashboard too (mirrors the persist path): drop any agent-supplied
-            # tx_hash, restore the node's already-persisted (clean, deduped) tx
-            # from the DB so the card shows exactly what's stored -- stable
-            # across refreshes and consistent with /v1/rounds -- and only
-            # chain-match rounds that aren't persisted yet.
+            # Same chain-authoritative enrichment as the persist path (shared
+            # helper) so the card shows exactly what's stored -- stable across
+            # refreshes, consistent with /v1/rounds. Persisted-tx lookup cached
+            # ~30s since the dashboard polls every 5s.
             day = (s.ts or "")[:10]
-            persisted = load_round_tx(node, day)
+            persisted = _cached_round_tx(node, day)
             tracker = get_tracker(wallet)
-            recent_rounds = tracker.attach_tx_hashes(
-                _prefill_persisted_tx(
-                    [{k: v for k, v in r.items() if k != "tx_hash"} for r in s.recent_rounds],
-                    persisted),
-                day,
-            )
-            all_rounds_today = tracker.attach_tx_hashes(
-                _prefill_persisted_tx(
-                    [{k: v for k, v in r.items() if k != "tx_hash"} for r in s.all_rounds_today],
-                    persisted),
-                day,
-            )
+            recent_rounds = _chain_authoritative_rounds(tracker, s.recent_rounds, persisted, day)
+            all_rounds_today = _chain_authoritative_rounds(tracker, s.all_rounds_today, persisted, day)
         else:
             recent_rounds = s.recent_rounds
             all_rounds_today = s.all_rounds_today

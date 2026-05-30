@@ -38,7 +38,7 @@ while (`$true) {
     try {
         & '$script' -ScriptsRoot '$ScriptsRoot' $dockerArg*>> '$logFile'
     } catch {
-        ('agent died: ' + `$_.Exception.Message + ' — restarting in 10s') | Out-File -FilePath '$logFile' -Append
+        ('agent died: ' + `$_.Exception.Message + ' - restarting in 10s') | Out-File -FilePath '$logFile' -Append
         Start-Sleep -Seconds 10
     }
 }

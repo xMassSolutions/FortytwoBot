@@ -1,0 +1,2 @@
+# Dev/test-only deps (not needed at runtime). Install: pip install -r requirements-dev.txt
+pytest==8.3.3

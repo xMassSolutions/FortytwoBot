@@ -1,0 +1,31 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install deps
+        run: pip install -r server/requirements.txt -r requirements-dev.txt
+      - name: Run tests
+        run: pytest -q
+      - name: Server import smoke
+        run: |
+          cd server
+          AGENT_TOKEN=ci WALLET=0x0000000000000000000000000000000000000000 \
+            python -c "import app; print('import ok')"
+      - name: PowerShell ASCII guard
+        # PowerShell 5.1 reads .ps1 as cp1252 without a BOM; a single non-ASCII
+        # char breaks the parser and takes the agent offline. Block it in CI too.
+        run: |
+          if grep -RPln "[^\x00-\x7F]" agent/*.ps1; then
+            echo "::error::Non-ASCII characters found in a .ps1 file"; exit 1
+          fi
+          echo "all .ps1 pure ASCII"
