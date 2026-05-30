@@ -813,18 +813,26 @@ async def dashboard_data(node: int = 1, _: None = Depends(require_login_json)):
     snapshot_dict = None
     if s:
         if wallet:
-            # Chain-side tx_hash backfill: recent Capsule versions stopped
-            # logging "Resolution of ... receipt hash 0x..." entirely, so the
-            # agent can't pair tx hashes from logs. The tracker matches each
-            # round to the nearest on-chain Transfer by timestamp (±60s) and
-            # injects the tx_hash. Rounds with a tx_hash already populated by
-            # the agent are left untouched. Falls back to passing through
-            # untouched if today_transfers is empty.
-            recent_rounds = get_tracker(wallet).attach_tx_hashes(
-                s.recent_rounds, (s.ts or "")[:10]
+            # Chain matcher is the SOLE authority for tx attribution on the
+            # dashboard too (mirrors the persist path): drop any agent-supplied
+            # tx_hash, restore the node's already-persisted (clean, deduped) tx
+            # from the DB so the card shows exactly what's stored -- stable
+            # across refreshes and consistent with /v1/rounds -- and only
+            # chain-match rounds that aren't persisted yet.
+            day = (s.ts or "")[:10]
+            persisted = load_round_tx(node, day)
+            tracker = get_tracker(wallet)
+            recent_rounds = tracker.attach_tx_hashes(
+                _prefill_persisted_tx(
+                    [{k: v for k, v in r.items() if k != "tx_hash"} for r in s.recent_rounds],
+                    persisted),
+                day,
             )
-            all_rounds_today = get_tracker(wallet).attach_tx_hashes(
-                s.all_rounds_today, (s.ts or "")[:10]
+            all_rounds_today = tracker.attach_tx_hashes(
+                _prefill_persisted_tx(
+                    [{k: v for k, v in r.items() if k != "tx_hash"} for r in s.all_rounds_today],
+                    persisted),
+                day,
             )
         else:
             recent_rounds = s.recent_rounds
