@@ -140,7 +140,7 @@ a { color: var(--blue); text-decoration: none; }
     <canvas id="hourChart"></canvas>
   </div>
   <div class="rounds-list">
-    <div class="section-title">Recent rounds</div>
+    <div class="section-title">Recent rewards</div>
     <table>
       <thead><tr><th>Time UTC</th><th>Duration</th><th>Round hash</th><th>Tx hash</th></tr></thead>
       <tbody id="rounds-body"></tbody>
@@ -396,6 +396,19 @@ function roundPending(hms){
   return age < 600;
 }
 
+// "Recent rewards" feed: keep only rounds that earned a payout (a matched
+// tx_hash) or just finished and are still landing on-chain (pending). Sourced
+// from the full enriched day (all_rounds_today, tx already attached server-
+// side), newest-first, capped. Drops observed-only and participated-but-
+// unrewarded rounds so the card reads as a wins list.
+function rewardRows(s){
+  const all = (s && s.all_rounds_today) || [];
+  return all
+    .filter(r => r.tx_hash || roundPending(r.completed_iso))
+    .reverse()
+    .slice(0, 10);
+}
+
 // FortyTwo brand colors (orange excluded) for the Today reward-outcome donut.
 const TODAY_COLORS = { rewarded: '#C3F53B', unrewarded: '#2D2BF7', observed: '#8A8A8A' };
 // Reward-outcome doughnut. participated/rewarded come from data.today (the
@@ -587,13 +600,13 @@ async function refresh(){
 
   if(!s){
     renderNodeCard(null, lastUptime);
-    document.getElementById('rounds-body').innerHTML = '<tr><td colspan="3" style="color:var(--muted);text-align:center">No data</td></tr>';
+    document.getElementById('rounds-body').innerHTML = '<tr><td colspan="4" style="color:var(--muted);text-align:center">No data</td></tr>';
   } else {
     renderNodeCard(s, lastUptime);
 
-    const recent = s.recent_rounds || [];
-    document.getElementById('rounds-body').innerHTML = recent.length
-      ? recent.map(r => {
+    const rewards = rewardRows(s);
+    document.getElementById('rounds-body').innerHTML = rewards.length
+      ? rewards.map(r => {
           const roundHash = (r.hash || '').slice(0, 16);
           const txHash = r.tx_hash;
           // Tx hash is the on-chain Monad receipt that paid the round's reward
@@ -601,9 +614,7 @@ async function refresh(){
           // Link goes to monadscan testnet so the user can verify on-chain.
           const txCell = txHash
             ? `<a href="https://testnet.monadscan.com/tx/${txHash}" target="_blank" rel="noopener" style="color:var(--blue);text-decoration:none" title="${txHash}">${txHash.slice(0,12)}…</a>`
-            : (roundPending(r.completed_iso)
-                ? '<span style="color:#C3F53B" title="reward not on-chain yet">pending</span>'
-                : '<span style="color:var(--muted)">—</span>');
+            : '<span style="color:#C3F53B" title="reward not on-chain yet">pending</span>';
           return `<tr>`
             + `<td>${r.completed_iso}</td>`
             + `<td>${r.duration_s}s</td>`
@@ -611,7 +622,7 @@ async function refresh(){
             + `<td>${txCell}</td>`
             + `</tr>`;
         }).join('')
-      : '<tr><td colspan="4" style="color:var(--muted);text-align:center">No rounds today</td></tr>';
+      : '<tr><td colspan="4" style="color:var(--muted);text-align:center">No rewards yet today</td></tr>';
   }
 
   // Today doughnut: participated/rewarded from Neon (data.today, DB-backed so
